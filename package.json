@@ -1,0 +1,88 @@
+{
+  "name": "dsh-time-introspect",
+  "version": "0.1.0",
+  "description": "耗时反思插件: 超时后把上一轮的耗时分布送到模型面前, 让模型自己定位, 自己调整; 反思成本过高时主动休眠, 模型可随时重启.",
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "README_en-US.md",
+    "LICENSE",
+    "COPYRIGHT"
+  ],
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "cordis",
+    "plugin",
+    "time",
+    "reflection",
+    "introspect",
+    "performance"
+  ],
+  "license": "Apache-2.0",
+  "author": "JularDepick",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JularDepick/dsh-time-introspect.git"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0",
+    "dsh": "0.2.0-rc.2 || 0.2.1-rc.1 || 0.2.1-rc.2"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "build:watch": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run typecheck && npm run test && npm run build"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "~3.18.5",
+    "zod": "4.4.3"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@deepseek-ai/dsh-agent": "0.2.0-rc.2 || 0.2.1-rc.1 || 0.2.1-rc.2",
+    "@deepseek-ai/dsh-llm": "0.2.0-rc.2 || 0.2.1-rc.1 || 0.2.1-rc.2",
+    "@deepseek-ai/dsh-session": "0.2.0-rc.2 || 0.2.1-rc.1 || 0.2.1-rc.2",
+    "@deepseek-ai/dsh-session-projection": "0.2.0-rc.2 || 0.2.1-rc.1 || 0.2.1-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.0-rc.2 || 0.2.1-rc.1 || 0.2.1-rc.2"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/dsh-agent": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-llm": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-session": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-session-projection": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.2",
+    "@types/node": "^22.19.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.4",
+    "zod": "4.4.3"
+  },
+  "overrides": {
+    "zod": "4.4.3"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "homepage": "https://github.com/JularDepick/dsh-time-introspect#readme",
+  "bugs": {
+    "url": "https://github.com/JularDepick/dsh-time-introspect/issues"
+  }
+}

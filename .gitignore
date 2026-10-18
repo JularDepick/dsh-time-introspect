@@ -1,0 +1,30 @@
+# Agent Runtime
+AGENTS.md
+.agent/
+.agents/
+
+# 依赖与构建产物
+node_modules/
+lib/
+coverage/
+*.tsbuildinfo
+
+# build
+build/
+dist/
+release/
+releases/
+
+# 版本文档不进入 git 追踪
+v*-*.md
+
+# 环境与编辑器
+.env
+.env.*
+.DS_Store
+Thumbs.db
+*.log
+
+# other
+temp/
+tmp/
