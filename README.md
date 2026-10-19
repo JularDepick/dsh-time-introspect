@@ -23,6 +23,7 @@
 - 显式反思边界: 模型调用 `time_introspect_start` 开始, `time_introspect_stop` 结束; 插件按两次调用的位置计时, 模型不需要整理或上报任何耗时数据
 - 反思自计费: 反思窗口内的全部耗时计入反思开销, 窗口内的工具单独列在 `introspect` 明细里, 帮助模型判断反思本身是否值得
 - 模型控制休眠: `time_introspect_shut` 让插件休眠, `time_introspect_waken` 恢复; 没有自动冷却与自动休眠
+- 对话内红点气泡: 每次模型调用本插件工具, 都在该工具调用位置显示红点; 新调用展开一行简要提示, 3 秒后收起, 红点保留; 点击红点可展开或收起详细信息
 - 状态可查: `time_introspect_status` 只读返回状态, 最近一轮总账与三类耗时合计
 - 仅主会话: 子代理会话不注入, 六个工具在子代理中完全隐藏
 - 可回放: 状态由会话投影从官方事件折叠, 进程重启自动重建; 不写自定义会话事件
@@ -116,7 +117,7 @@ dsh plugin --profile <name> add dsh-time-introspect
 | `maxTurnHistory` | `12` | 投影保留的已完成轮数上限 |
 | `locale` | `zh-CN` | 模型可见文案语言, 可选 `zh-CN` 或 `en-US` |
 
-气泡相关配置待气泡设计定稿后补充.
+气泡自动展开时长固定为 3 秒, 历史调用自动展开窗口固定为 15 秒, 不提供配置.
 
 ## 口径与判定
 
@@ -137,6 +138,16 @@ dsh plugin --profile <name> add dsh-time-introspect
 | dormant | 不注入, 不累计反思 | 模型调用 `time_introspect_shut` | 模型调用 `time_introspect_waken` |
 
 没有自动冷却, 没有自动休眠. 是否让插件安静由模型决定.
+
+## 用户可见气泡
+
+- 气泡做进对话记录, 不覆盖输入框, 不阻塞模型或用户操作, 随聊天记录滚动
+- 每个本插件工具调用位置都有一个红点按钮; 红点只是位置标记, 不表示调用失败
+- 新调用出现时自动展开一行简要提示, 3 秒后收起; 红点保留
+- 只有挂载时距调用时间不超过 15 秒的调用会自动展开; 历史记录中的调用只显示红点, 避免打开旧会话时同时弹出大量气泡
+- 点击红点展开或收起详细信息; 展开后不会自动收起, 直到再次点击
+- 详情包含工具名, 阶段, 时间, 轮次, 参数与结果; 结束反思会显示本次反思耗时, 状态查询会显示结果 JSON
+- 文案跟随 Web UI 语言
 
 ## 与时钟插件的关系
 
@@ -160,7 +171,7 @@ npm run build
 npm run pack
 ```
 
-构建产物在 `lib/`, 入口为 `lib/index.js`. `npm run pack` 把 tgz 产物统一放进 `release/`. 机制细节见 [docs/mechanism.md](./docs/mechanism.md).
+构建产物在 `lib/`, 入口为 `lib/index.js`, 客户端入口为 `lib/client.js`. `npm run build` 同时生成 host 与 client; `npm run build:client` 只重建客户端. `npm run pack` 把 tgz 产物统一放进 `release/`. 机制细节见 [docs/mechanism.md](./docs/mechanism.md).
 
 目录结构:
 
@@ -171,6 +182,7 @@ dsh-time-introspect/
 ├── LICENSE               # Apache-2.0 许可证
 ├── README.md             # 中文 README
 ├── README_en-US.md       # 英文 README
+├── client/               # 浏览器半端: 红点气泡
 ├── cordis.patch.yml      # 组合包 patch 层
 ├── docs/                 # 项目文档与官方开发文档快照
 ├── package.json          # 包清单

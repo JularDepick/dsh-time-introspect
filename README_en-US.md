@@ -23,6 +23,7 @@ Supports dsh 0.2.0-rc.2, 0.2.1-rc.1 and 0.2.1-rc.2
 - Explicit reflection boundaries: the model calls `time_introspect_start` and `time_introspect_stop`; the plugin measures between those positions, so the model never compiles or reports timing data
 - Self-billed reflection: all time inside the reflection window counts as reflection cost; tools used inside it are listed under `introspect` so the model can judge whether reflection paid off
 - Model-controlled sleep: `time_introspect_shut` puts the plugin to sleep and `time_introspect_waken` restores it; there is no automatic cooling or dormancy
+- In-transcript red-dot bubbles: every call to this plugin's tools shows a red dot at that call position; a new call expands a one-line hint for 3 seconds, then collapses while the dot stays; click the dot to expand or collapse details
 - Status query: `time_introspect_status` returns read-only state, the last turn totals, and the three top-level totals
 - Main session only: subagent sessions receive no injection, and all six tools are hidden there
 - Replayable: state folds from official session events, so a process restart rebuilds it; no custom session event type is written
@@ -116,7 +117,7 @@ Every tool name carries the `time_introspect_` prefix. The plugin blocks no tool
 | `maxTurnHistory` | `12` | Completed turns kept by the projection |
 | `locale` | `zh-CN` | Model-facing text language, `zh-CN` or `en-US` |
 
-Bubble-related configuration will be added once the bubble design is final.
+The bubble auto-expand duration is fixed at 3 seconds, and the history auto-expand window is fixed at 15 seconds; neither is configurable.
 
 ## Measurement
 
@@ -137,6 +138,16 @@ Bubble-related configuration will be added once the bubble design is final.
 | dormant | No injection, no reflection accounting | The model calls `time_introspect_shut` | The model calls `time_introspect_waken` |
 
 There is no automatic cooling or dormancy. Whether the plugin goes quiet is the model's decision.
+
+## User-visible bubbles
+
+- Bubbles live in the conversation transcript; they do not cover the composer, block the model or the user, and scroll with the transcript
+- Every call to this plugin's tools has a red-dot button; the dot is a position marker, not an error state
+- A new call auto-expands a one-line hint for 3 seconds, then collapses; the dot remains
+- Only calls within 15 seconds of mount auto-expand; calls in history show the dot only, so opening an old session does not pop many bubbles at once
+- Click the dot to expand or collapse details; an expanded bubble stays open until clicked again
+- Details include tool, phase, time, turn, arguments and result; stopping reflection shows the reflection cost, and status queries show the result JSON
+- Text follows the Web UI language
 
 ## Relationship to clock plugins
 
@@ -160,7 +171,7 @@ npm run build
 npm run pack
 ```
 
-Build output lives in `lib/` with `lib/index.js` as the entry. `npm run pack` writes the tgz artifact into `release/`. Mechanism details live in [docs/mechanism.md](./docs/mechanism.md).
+Build output lives in `lib/`, with `lib/index.js` as the host entry and `lib/client.js` as the browser entry. `npm run build` produces both; `npm run build:client` rebuilds the client only. `npm run pack` writes the tgz artifact into `release/`. Mechanism details live in [docs/mechanism.md](./docs/mechanism.md).
 
 Directory layout:
 
@@ -171,6 +182,7 @@ dsh-time-introspect/
 ├── LICENSE               # Apache-2.0 license
 ├── README.md             # Chinese README
 ├── README_en-US.md       # English README
+├── client/               # browser half: red-dot bubbles
 ├── cordis.patch.yml      # bundle patch layer
 ├── docs/                 # project docs and official developer doc snapshots
 ├── package.json          # package manifest

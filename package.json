@@ -1,7 +1,7 @@
 {
   "name": "dsh-time-introspect",
   "version": "0.1.0",
-  "description": "耗时反思插件: 超时后把上一轮的耗时分布送到模型面前, 让模型自己定位, 自己调整; 反思成本过高时主动休眠, 模型可随时重启.",
+  "description": "耗时反思插件: 超时后把完整耗时分布以 JSON 注入下一轮, 模型显式开始与结束反思, 并自行控制插件休眠与重启.",
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
@@ -9,6 +9,9 @@
     ".": {
       "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
     },
     "./package.json": "./package.json"
   },
@@ -41,14 +44,15 @@
     "dsh": "0.2.0-rc.2 || 0.2.1-rc.1 || 0.2.1-rc.2"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node scripts/build-client.mjs",
     "build:watch": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "pack": "node scripts/pack.mjs",
     "prepack": "npm run build",
-    "prepublishOnly": "npm run typecheck && npm run test && npm run build"
+    "prepublishOnly": "npm run typecheck && npm run test && npm run build",
+    "build:client": "node scripts/build-client.mjs"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "~3.18.5",
@@ -72,7 +76,8 @@
     "@types/node": "^22.19.0",
     "typescript": "^5.9.0",
     "vitest": "^3.2.4",
-    "zod": "4.4.3"
+    "zod": "4.4.3",
+    "esbuild": "^0.28.2"
   },
   "overrides": {
     "zod": "4.4.3"
@@ -80,6 +85,18 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-tool",
+        "@deepseek-ai/dsh-client-ui-chat",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-session",
+        "@deepseek-ai/dsh-api-session-controller"
+      ]
     }
   },
   "homepage": "https://github.com/JularDepick/dsh-time-introspect#readme",
