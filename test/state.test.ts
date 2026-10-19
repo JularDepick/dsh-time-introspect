@@ -51,12 +51,12 @@ describe('投影折叠', () => {
     expect(record?.toolCalls).toBe(3)
   })
 
-  test('task_estimate 参数被记为该轮预估, 同轮以最后一次为准', () => {
+  test('time_introspect_task_estimate 参数被记为该轮预估, 同轮以最后一次为准', () => {
     const state = run([
       ev('turn/start', { turn: 1 }, 1_000),
-      toolCall(1_100, 'a', 'task_estimate', '{"estimateMs":30000}'),
+      toolCall(1_100, 'a', 'time_introspect_task_estimate', '{"estimateMs":30000}'),
       toolResult(1_200, 'a'),
-      toolCall(1_300, 'b', 'task_estimate', '{"estimateMs":45000}'),
+      toolCall(1_300, 'b', 'time_introspect_task_estimate', '{"estimateMs":45000}'),
       toolResult(1_400, 'b'),
     ])
     expect(state.turns[0]?.estimateMs).toBe(45_000)
@@ -65,17 +65,17 @@ describe('投影折叠', () => {
   test('非法预估参数被忽略', () => {
     const state = run([
       ev('turn/start', { turn: 1 }, 1_000),
-      toolCall(1_100, 'a', 'task_estimate', '{"estimateMs":0}'),
+      toolCall(1_100, 'a', 'time_introspect_task_estimate', '{"estimateMs":0}'),
       toolResult(1_200, 'a'),
     ])
     expect(state.turns[0]?.estimateMs).toBeNull()
   })
 
-  test('反思窗口从注入时刻到 report_reflection_cost 结束', () => {
+  test('反思窗口从注入时刻到 time_introspect_report_reflection_cost 结束', () => {
     const state = run([
       ev('turn/start', { turn: 1 }, 1_000),
       injected(2_000),
-      toolCall(3_000, 'r', 'report_reflection_cost', '{"summary":"ok"}'),
+      toolCall(3_000, 'r', 'time_introspect_report_reflection_cost', '{"summary":"ok"}'),
       toolResult(3_400, 'r'),
       ev('turn/end', { turn: 1, reason: { kind: 'completed' } } as unknown as SessionEventMap['turn/end'], 5_000),
     ])
@@ -101,13 +101,13 @@ describe('投影折叠', () => {
     const state = run(
       [
         ev('turn/start', { turn: 1 }, 1_000),
-        toolCall(1_100, 'r', 'report_reflection_cost'),
+        toolCall(1_100, 'r', 'time_introspect_report_reflection_cost'),
         toolResult(1_600, 'r'),
       ],
       dormant,
     )
     expect(state.turns[0]?.reflectionMs).toBe(0)
-    expect(state.turns[0]?.toolMs).toEqual({ report_reflection_cost: 500 })
+    expect(state.turns[0]?.toolMs).toEqual({ time_introspect_report_reflection_cost: 500 })
   })
 
   test('轮次结束后按上限裁剪历史', () => {
@@ -133,11 +133,11 @@ describe('投影折叠', () => {
     expect(state.turns[0]?.injectionForm).toBe('notice')
   })
 
-  test('resume_reflection 重置自约束状态并记录原因', () => {
+  test('time_introspect_resume_reflection 重置自约束状态并记录原因', () => {
     const dormant = { ...initialIntrospectState(), status: 'dormant' as const, cooldownCount: 2, noticePending: true }
     const state = run(
       [
-        toolCall(1_000, 'resume', 'resume_reflection', '{"reason":"步骤越来越冗杂"}'),
+        toolCall(1_000, 'resume', 'time_introspect_resume_reflection', '{"reason":"步骤越来越冗杂"}'),
         toolResult(1_100, 'resume'),
       ],
       dormant,

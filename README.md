@@ -23,7 +23,7 @@
 - 定位到分工: "模型自身处理" = 实际耗时 - 工具耗时 - 反思开销, 这一项单独成行, 用于判断时间花在工具编排还是自身推理
 - 反思自计费: 从注入进入会话日志到反思阶段结束之间的可观测耗时计入"反思开销", 并在下一次反馈中送达, 让模型自己判断反思是否还值得继续
 - 自约束: 连续多轮反思占比过高且耗时没有改善时进入冷却, 冷却累计到上限后休眠; 休眠只注入一次通知, 此后保持安静
-- 模型可重启: `resume_reflection` 始终注册, 模型可以随时重新启用反思并写下自述原因; 重启后的前若干轮使用更保守的冷却阈值, 防止"重启后立即再次休眠"的空转
+- 模型可重启: `time_introspect_resume_reflection` 始终注册, 模型可以随时重新启用反思并写下自述原因; 重启后的前若干轮使用更保守的冷却阈值, 防止"重启后立即再次休眠"的空转
 - 可回放: 全部状态从会话事件日志折叠而来, 进程重启后自动重建, 不写入任何自定义会话事件类型
 - 双语文案: 模型可见的注入与工具描述可选中文(`zh-CN`, 默认)或英文(`en-US`)
 
@@ -41,7 +41,7 @@
 反思开销: 4.8s, 占该轮总耗时 9%.
 ```
 
-首次注入会额外附带一行口径提示, 说明 `task_estimate` 与 `report_reflection_cost` 的用法. 反思由模型主动重启时, 注入开头会带上模型自述的原因.
+首次注入会额外附带一行口径提示, 说明 `time_introspect_task_estimate` 与 `time_introspect_report_reflection_cost` 的用法. 反思由模型主动重启时, 注入开头会带上模型自述的原因.
 
 ## 安装
 
@@ -51,15 +51,17 @@ dsh plugin --profile <name> add dsh-time-introspect
 
 `<name>` 是目标 profile, 例如 `web`, `desktop` 或专用 profile.
 
-安装后的默认配置即可工作. 插件不主动推送耗时读数, 只有模型用 `task_estimate` 登记过预估的轮次才会被比较.
+安装后的默认配置即可工作. 插件不主动推送耗时读数, 只有模型用 `time_introspect_task_estimate` 登记过预估的轮次才会被比较.
 
 ## 工具
 
+工具名统一带 `time_introspect_` 前缀, 避免与其他插件重名.
+
 | 工具 | 作用 | 参数 |
 |:---:|:---|:---|
-| `task_estimate` | 登记本轮预估耗时(毫秒). 任务开始时调用; 同一轮多次调用以最后一次为准 | `estimateMs` 必填, 上限 24 小时; `note` 可选 |
-| `report_reflection_cost` | 标记反思分析结束, 结束反思计时 | `summary` 可选, `worthIt` 可选 |
-| `resume_reflection` | 反思休眠后重新启用. 任何时候都可调用, 不审查理由 | `reason` 必填, 最长 500 字符 |
+| `time_introspect_task_estimate` | 登记本轮预估耗时(毫秒). 任务开始时调用; 同一轮多次调用以最后一次为准 | `estimateMs` 必填, 上限 24 小时; `note` 可选 |
+| `time_introspect_report_reflection_cost` | 标记反思分析结束, 结束反思计时 | `summary` 可选, `worthIt` 可选 |
+| `time_introspect_resume_reflection` | 反思休眠后重新启用. 任何时候都可调用, 不审查理由 | `reason` 必填, 最长 500 字符 |
 
 三个工具都是建议性通道: 插件不阻断任何工具调用, 也不检查模型是否真的执行了反思.
 
@@ -98,10 +100,10 @@ dsh plugin --profile <name> add dsh-time-introspect
 
 ## 口径与判定
 
-- 上一轮: 当前轮之前最近一个已闭合的轮次. 当前轮没有前序轮次或前序轮次没有 `task_estimate` 记录时不注入
+- 上一轮: 当前轮之前最近一个已闭合的轮次. 当前轮没有前序轮次或前序轮次没有 `time_introspect_task_estimate` 记录时不注入
 - 实际耗时: `turn/end` 事件时间减去 `turn/start` 事件时间
 - 工具耗时: 按 `callId` 配对 `tool/call` 与 `tool/result`, 覆盖审批等待与会话排队时间
-- 反思开销: 从注入消息进入日志到反思阶段结束. 结束点是 `report_reflection_cost` 的结果, 或反思后第一个普通工具调用的开始, 先到者为准; 一轮结束时仍未结束的窗口不记为反思开销
+- 反思开销: 从注入消息进入日志到反思阶段结束. 结束点是 `time_introspect_report_reflection_cost` 的结果, 或反思后第一个普通工具调用的开始, 先到者为准; 一轮结束时仍未结束的窗口不记为反思开销
 - 模型自身处理: `实际耗时 - 工具耗时 - 反思开销`, 下限为 0
 - 恢复产生的零时长轮次(崩溃恢复时会复用最后事件时间)不参与注入与自约束判定
 
@@ -111,7 +113,7 @@ dsh plugin --profile <name> add dsh-time-introspect
 |:---:|:---|:---|:---|
 | active | 正常判定并注入 | 初始状态, 或冷却期结束 | 连续 `coolAfterHighTurns` 轮反思占比高于阈值且无改善 |
 | cooling | 不注入 | 触发冷却 | 经过 `coolTurns` 轮(每轮冷却翻倍, 最多 8 倍) |
-| dormant | 不注入, 不累计反思开销, 只发一次通知 | 累计冷却次数达到 `dormancyAfterCooldowns` | 模型调用 `resume_reflection` |
+| dormant | 不注入, 不累计反思开销, 只发一次通知 | 累计冷却次数达到 `dormancyAfterCooldowns` | 模型调用 `time_introspect_resume_reflection` |
 
 重启后 `conservativeTurns` 轮内使用 `coolRatioAfterResume`, 冷却计数清零, 但保留普通工具耗时记录, 便于重启前后对比.
 
@@ -134,9 +136,10 @@ npm install
 npm run typecheck
 npm test
 npm run build
+npm run pack
 ```
 
-构建产物在 `lib/`, 入口为 `lib/index.js`. 本地调试时先用 `npm run build` 生成产物, 再把 `--patch` 指向 `lib/index.js`. 机制细节见 [docs/mechanism.md](./docs/mechanism.md).
+构建产物在 `lib/`, 入口为 `lib/index.js`. 本地调试时先用 `npm run build` 生成产物, 再把 `--patch` 指向 `lib/index.js`. `npm run pack` 把 tgz 产物统一放进 `release/`. 机制细节见 [docs/mechanism.md](./docs/mechanism.md).
 
 目录结构:
 
@@ -150,6 +153,7 @@ dsh-time-introspect/
 ├── cordis.patch.yml      # 组合包 patch 层
 ├── docs/                 # 项目文档与官方开发文档快照
 ├── package.json          # 包清单
+├── scripts/              # 辅助脚本
 ├── src/                  # 插件源码
 ├── test/                 # 单元测试
 ├── tsconfig.build.json   # 构建配置

@@ -18,6 +18,9 @@ releases/
 # 版本文档不进入 git 追踪
 v*-*.md
 
+# 本地打包产物
+*.tgz
+
 # 环境与编辑器
 .env
 .env.*

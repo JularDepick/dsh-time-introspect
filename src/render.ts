@@ -1,6 +1,7 @@
 /* 模型可见文案的渲染; 中文为主, 英文为可选语言. */
 
 import type { Config } from './config.js'
+import { ESTIMATE_TOOL, REFLECTION_COST_TOOL, RESUME_TOOL } from './constants.js'
 import type { ReflectionPlan } from './policy.js'
 import type { TurnRecord } from './state-types.js'
 
@@ -84,8 +85,8 @@ export function renderReflection(plan: ReflectionPlan, config: Config): string {
     lines.push('')
     lines.push(
       zh
-        ? '提示: 任务开始时用 task_estimate 记录预估; 反思分析结束后调用 report_reflection_cost 标记结束.'
-        : 'Tip: record your estimate with task_estimate at task start, and call report_reflection_cost when the reflection analysis ends.',
+        ? `提示: 任务开始时用 ${ESTIMATE_TOOL} 记录预估; 反思分析结束后调用 ${REFLECTION_COST_TOOL} 标记结束.`
+        : `Tip: record your estimate with ${ESTIMATE_TOOL} at task start, and call ${REFLECTION_COST_TOOL} when the reflection analysis ends.`,
     )
   }
   return lines.join('\n')
@@ -96,12 +97,12 @@ export function renderDormantNotice(config: Config): string {
   if (config.locale === 'en-US') {
     return [
       '[time reflection dormant] Reflection prompts are paused because reflection overhead stayed high without clear improvement.',
-      'If you later find work getting harder, time repeatedly running long, or steps getting more tangled, call resume_reflection to turn time reflection back on and state your reasoning.',
+      `If you later find work getting harder, time repeatedly running long, or steps getting more tangled, call ${RESUME_TOOL} to turn time reflection back on and state your reasoning.`,
     ].join('\n')
   }
   return [
     '[耗时反思休眠] 因反思开销连续偏高且未带来明显改善, 反思提示已暂停.',
-    '如果你在后续工作中自己发现耗时反复偏高, 步骤越来越冗杂, 任务推进越来越困难, 可以调用 resume_reflection 重新启用耗时反思, 并说明你的判断依据.',
+    `如果你在后续工作中自己发现耗时反复偏高, 步骤越来越冗杂, 任务推进越来越困难, 可以调用 ${RESUME_TOOL} 重新启用耗时反思, 并说明你的判断依据.`,
   ].join('\n')
 }
 

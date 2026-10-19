@@ -12,14 +12,17 @@ export const PROJECTION_KEY = 'timeIntrospect'
 /** 投影状态版本; 折叠语义或字段变化时递增. */
 export const PROJECTION_STATE_VERSION = 1
 
+/** 工具名统一前缀, 取自包名去掉 dsh- 前缀. */
+export const TOOL_PREFIX = 'time_introspect_'
+
 /** 模型用于登记耗时预估的工具名. */
-export const ESTIMATE_TOOL = 'task_estimate'
+export const ESTIMATE_TOOL = `${TOOL_PREFIX}task_estimate`
 
 /** 模型用于结束反思阶段计时的工具名. */
-export const REFLECTION_COST_TOOL = 'report_reflection_cost'
+export const REFLECTION_COST_TOOL = `${TOOL_PREFIX}report_reflection_cost`
 
 /** 模型用于在休眠后主动重启反思的工具名. */
-export const RESUME_TOOL = 'resume_reflection'
+export const RESUME_TOOL = `${TOOL_PREFIX}resume_reflection`
 
 /** 单条预估允许的最大值(24 小时), 防止异常参数污染统计. */
 export const MAX_ESTIMATE_MS = 24 * 60 * 60 * 1000

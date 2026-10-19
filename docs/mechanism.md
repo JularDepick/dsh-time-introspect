@@ -19,7 +19,7 @@
 | `turn/start`, `turn/end` | 轮次边界与实际耗时 |
 | `tool/call`, `tool/result` | 按 `callId` 配对得到单次工具耗时 |
 | `user/message` | 识别本插件注入的反思提示与休眠通知 |
-| `tool/call` 的 `arguments` | 读取 `task_estimate` 的预估与 `resume_reflection` 的自述原因 |
+| `tool/call` 的 `arguments` | 读取 `time_introspect_task_estimate` 的预估与 `time_introspect_resume_reflection` 的自述原因 |
 
 事件信封上的 `time` 是唯一时间戳来源; 事件载荷内没有现成的耗时字段.
 
@@ -37,7 +37,7 @@
 - 实际耗时 = `turn/end.time - turn/start.time`
 - 工具耗时 = `tool/result.time - tool/call.time`, 覆盖审批等待与会话排队
 - 反思开销 = 注入消息进入日志的时刻到反思阶段结束
-  - 结束点是 `report_reflection_cost` 的结果, 或反思后第一个普通工具调用的开始, 先到者为准
+  - 结束点是 `time_introspect_report_reflection_cost` 的结果, 或反思后第一个普通工具调用的开始, 先到者为准
   - 轮次结束时窗口仍未关闭则不记入, 避免把整轮模型时间算成反思成本
 - 模型自身处理 = `max(0, 实际 - 工具耗时 - 反思开销)`
 
@@ -72,7 +72,7 @@
 - 冷却中每闭合一轮递减剩余轮数, 归零后回到 active
 - 休眠期间不累计反思开销, 普通工具耗时照常记录
 
-`resume_reflection` 的调用事件本身触发状态迁移: 回到 active, 冷却计数清零, 保守阈值生效 `conservativeTurns` 轮, 自述原因保留到下一次反思注入时作为前缀呈现.
+`time_introspect_resume_reflection` 的调用事件本身触发状态迁移: 回到 active, 冷却计数清零, 保守阈值生效 `conservativeTurns` 轮, 自述原因保留到下一次反思注入时作为前缀呈现.
 
 ## 已知限制
 

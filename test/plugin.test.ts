@@ -44,7 +44,7 @@ function qualifiedEvents(): SessionEvent[] {
     ev('turn/start', { turn: 1 }, 1_000),
     ev(
       'tool/call',
-      { turn: 1, step: 1, callId: 'e', name: 'task_estimate', arguments: '{"estimateMs":30000}' } as unknown as SessionEventMap['tool/call'],
+      { turn: 1, step: 1, callId: 'e', name: 'time_introspect_task_estimate', arguments: '{"estimateMs":30000}' } as unknown as SessionEventMap['tool/call'],
       1_100,
     ),
     ev(
@@ -93,7 +93,7 @@ describe('插件装配', () => {
     const { tools, definitions, listeners } = prepare()
     expect(definitions).toHaveLength(1)
     expect(definitions[0].key).toBe(PROJECTION_KEY)
-    expect(tools.map((tool) => tool.name)).toEqual(['task_estimate', 'report_reflection_cost', 'resume_reflection'])
+    expect(tools.map((tool) => tool.name)).toEqual(['time_introspect_task_estimate', 'time_introspect_report_reflection_cost', 'time_introspect_resume_reflection'])
     expect(listeners.get('agent/pre-step')).toHaveLength(1)
   })
 
@@ -186,7 +186,7 @@ describe('注入时机', () => {
 })
 
 describe('工具行为', () => {
-  test('task_estimate 校验取值范围', async () => {
+  test('time_introspect_task_estimate 校验取值范围', async () => {
     const { tools } = prepare()
     const tool = tools[0]
     await expect(tool.execute({ estimateMs: 30_000 }, {} as never)).resolves.toEqual({ recorded: true, estimateMs: 30_000 })
@@ -194,7 +194,7 @@ describe('工具行为', () => {
     await expect(tool.execute({ estimateMs: 25 * 60 * 60 * 1000 }, {} as never)).rejects.toThrow(/estimateMs/)
   })
 
-  test('resume_reflection 要求非空原因并裁剪长度', async () => {
+  test('time_introspect_resume_reflection 要求非空原因并裁剪长度', async () => {
     const { tools } = prepare()
     const tool = tools[2]
     await expect(tool.execute({ reason: '   ' }, {} as never)).rejects.toThrow(/reason/)

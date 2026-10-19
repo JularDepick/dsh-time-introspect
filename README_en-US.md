@@ -23,7 +23,7 @@ Supports dsh 0.2.0-rc.2, 0.2.1-rc.1 and 0.2.1-rc.2
 - Actionable split: "model self-processing" is actual - tool time - reflection cost. The separate line tells whether time went to tool orchestration or to the model own reasoning
 - Self-billing reflection: observable time from injection to the end of the reflection phase is counted as "reflection cost" and delivered with the next feedback, so the model can judge whether reflection still pays off
 - Self-constraint: consecutive turns with high reflection ratio and no improvement enter cooling; accumulating cooling cycles leads to dormancy. Dormancy injects one notice and then stays quiet
-- Model-controlled restart: `resume_reflection` stays registered. The model can re-enable reflection at any time with a stated reason. The first turns after a restart use a stricter cooling threshold, preventing a restart-then-sleep loop
+- Model-controlled restart: `time_introspect_resume_reflection` stays registered. The model can re-enable reflection at any time with a stated reason. The first turns after a restart use a stricter cooling threshold, preventing a restart-then-sleep loop
 - Replayable: all state folds from the official session event log and is rebuilt after a process restart. No custom session event type is written
 - Bilingual model-facing text: Chinese (`zh-CN`, default) or English (`en-US`)
 
@@ -41,7 +41,7 @@ Model self-processing: 13.4s (26%). If this is high, shorten the reasoning chain
 Reflection cost: 4.8s, 9% of the turn.
 ```
 
-The first injection also carries one hint line about `task_estimate` and `report_reflection_cost`. When the model restarted reflection itself, the injection opens with the stated reason.
+The first injection also carries one hint line about `time_introspect_task_estimate` and `time_introspect_report_reflection_cost`. When the model restarted reflection itself, the injection opens with the stated reason.
 
 ## Install
 
@@ -51,15 +51,17 @@ dsh plugin --profile <name> add dsh-time-introspect
 
 `<name>` is the target profile, for example `web`, `desktop` or a dedicated profile.
 
-The plugin works with its defaults. It never broadcasts timing readings; only turns where the model registered an estimate with `task_estimate` are compared.
+The plugin works with its defaults. It never broadcasts timing readings; only turns where the model registered an estimate with `time_introspect_task_estimate` are compared.
 
 ## Tools
 
+Every tool name carries the `time_introspect_` prefix to avoid collisions with other plugins.
+
 | Tool | Purpose | Parameters |
 |:---:|:---|:---|
-| `task_estimate` | Register this turn estimated duration in milliseconds. Call at task start; later calls in the same turn replace earlier ones | `estimateMs` required, at most 24 hours; `note` optional |
-| `report_reflection_cost` | Close the reflection analysis and its timing | `summary` optional, `worthIt` optional |
-| `resume_reflection` | Re-enable reflection after dormancy. Usable at any time; the reason is recorded, not judged | `reason` required, at most 500 characters |
+| `time_introspect_task_estimate` | Register this turn estimated duration in milliseconds. Call at task start; later calls in the same turn replace earlier ones | `estimateMs` required, at most 24 hours; `note` optional |
+| `time_introspect_report_reflection_cost` | Close the reflection analysis and its timing | `summary` optional, `worthIt` optional |
+| `time_introspect_resume_reflection` | Re-enable reflection after dormancy. Usable at any time; the reason is recorded, not judged | `reason` required, at most 500 characters |
 
 All three are advisory channels. The plugin blocks no tool call and never checks whether a reflection actually happened.
 
@@ -98,10 +100,10 @@ Invalid configuration fails at plugin load instead of silently falling back to d
 
 ## Measurement
 
-- Previous turn: the latest closed turn before the current one. No previous turn, or no `task_estimate` in it, means no injection
+- Previous turn: the latest closed turn before the current one. No previous turn, or no `time_introspect_task_estimate` in it, means no injection
 - Actual duration: `turn/end` event time minus `turn/start` event time
 - Tool duration: `tool/call` and `tool/result` paired by `callId`, which covers approval waits and session queueing
-- Reflection cost: from the injection entering the log to the end of the reflection phase. The end is the `report_reflection_cost` result or the start of the first ordinary tool call after the injection, whichever comes first. A window still open when the turn ends is not counted
+- Reflection cost: from the injection entering the log to the end of the reflection phase. The end is the `time_introspect_report_reflection_cost` result or the start of the first ordinary tool call after the injection, whichever comes first. A window still open when the turn ends is not counted
 - Model self-processing: `actual - tool time - reflection cost`, floored at zero
 - Zero-duration turns produced by crash recovery (which reuses the last event time) are ignored by both injection and self-constraint
 
@@ -111,7 +113,7 @@ Self-constraint transitions:
 |:---:|:---|:---|:---|
 | active | Judge and inject | Initial state, or cooling finished | `coolAfterHighTurns` consecutive high-ratio, no-improvement turns |
 | cooling | No injection | Cooling triggered | After `coolTurns` turns (each cycle doubles, capped at 8x) |
-| dormant | No injection, no reflection accounting, one notice | Accumulated cooling cycles reach `dormancyAfterCooldowns` | The model calls `resume_reflection` |
+| dormant | No injection, no reflection accounting, one notice | Accumulated cooling cycles reach `dormancyAfterCooldowns` | The model calls `time_introspect_resume_reflection` |
 
 After a restart, `conservativeTurns` turns use `coolRatioAfterResume`; cooling counters reset while ordinary tool records stay available for before/after comparison.
 
@@ -134,9 +136,10 @@ npm install
 npm run typecheck
 npm test
 npm run build
+npm run pack
 ```
 
-Build output lives in `lib/` with `lib/index.js` as the entry. For local debugging, run `npm run build` first and point `--patch` at `lib/index.js`. Mechanism details live in [docs/mechanism.md](./docs/mechanism.md).
+Build output lives in `lib/` with `lib/index.js` as the entry. For local debugging, run `npm run build` first and point `--patch` at `lib/index.js`. `npm run pack` writes the tgz artifact into `release/`. Mechanism details live in [docs/mechanism.md](./docs/mechanism.md).
 
 Directory layout:
 
@@ -150,6 +153,7 @@ dsh-time-introspect/
 ├── cordis.patch.yml      # bundle patch layer
 ├── docs/                 # project docs and official developer doc snapshots
 ├── package.json          # package manifest
+├── scripts/              # auxiliary scripts
 ├── src/                  # plugin sources
 ├── test/                 # unit tests
 ├── tsconfig.build.json   # build configuration

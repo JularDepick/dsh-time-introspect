@@ -61,7 +61,7 @@ describe('反思注入文案', () => {
     expect(text).toContain('耗时分布: bash 22.1s (43%) / 模型自身处理 15.7s (30%) / read 9.4s (18%)')
     expect(text).toContain('模型自身处理: 15.7s (30%)')
     expect(text).toContain('反思开销: 4.8s, 占该轮总耗时 9%')
-    expect(text).toContain('task_estimate')
+    expect(text).toContain('time_introspect_task_estimate')
   })
 
   test('重启前缀携带自述原因', () => {
@@ -84,7 +84,7 @@ describe('休眠通知', () => {
   test('说明原因与重启通道', () => {
     const text = renderDormantNotice(config)
     expect(text).toContain('[耗时反思休眠]')
-    expect(text).toContain('resume_reflection')
-    expect(renderDormantNotice(makeConfig({ locale: 'en-US' }))).toContain('resume_reflection')
+    expect(text).toContain('time_introspect_resume_reflection')
+    expect(renderDormantNotice(makeConfig({ locale: 'en-US' }))).toContain('time_introspect_resume_reflection')
   })
 })

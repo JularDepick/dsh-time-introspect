@@ -46,6 +46,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
+    "pack": "node scripts/pack.mjs",
     "prepack": "npm run build",
     "prepublishOnly": "npm run typecheck && npm run test && npm run build"
   },
