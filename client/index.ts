@@ -41,7 +41,7 @@ const zh: Record<string, string> = {
   'detail.args': '参数',
   'detail.result': '结果',
   'detail.error': '错误',
-  'detail.reflection': '本次反思',
+  'detail.introspection': '本次反思',
   'detail.state': '插件状态',
   'detail.inspect': '在轨迹中查看',
   'detail.noResult': '暂无结果',
@@ -52,16 +52,16 @@ const zh: Record<string, string> = {
 
 const en: Record<string, string> = {
   'tool.estimate': 'Estimate',
-  'tool.start': 'Start reflection',
-  'tool.stop': 'Stop reflection',
+  'tool.start': 'Start introspection',
+  'tool.stop': 'Stop introspection',
   'tool.shut': 'Sleep plugin',
   'tool.waken': 'Wake plugin',
   'tool.status': 'Query time status',
   'brief.estimate': 'Recorded estimate {ms}',
   'brief.estimatePending': 'Recording estimate',
-  'brief.start': 'Started reflection',
-  'brief.stop': 'Stopped reflection',
-  'brief.stopMs': 'Stopped reflection · {ms}',
+  'brief.start': 'Started introspection',
+  'brief.stop': 'Stopped introspection',
+  'brief.stopMs': 'Stopped introspection · {ms}',
   'brief.shut': 'Plugin asleep · {reason}',
   'brief.shutNoReason': 'Plugin asleep',
   'brief.waken': 'Plugin awake · {reason}',
@@ -75,7 +75,7 @@ const en: Record<string, string> = {
   'detail.args': 'Arguments',
   'detail.result': 'Result',
   'detail.error': 'Error',
-  'detail.reflection': 'Reflection',
+  'detail.introspection': 'Introspection',
   'detail.state': 'Plugin state',
   'detail.inspect': 'View in trajectory',
   'detail.noResult': 'No result',
@@ -133,7 +133,7 @@ function ToolBubble(props: any) {
   const reason = readText(args, 'reason')
   const resultText = phase === 'result' ? flattenContent(block?.content) : ''
   const errorText = phase === 'result' ? readError(block) : ''
-  const stopMs = toolName === 'time_introspect_stop' ? (current?.reflectionMs ?? 0) : 0
+  const stopMs = toolName === 'time_introspect_stop' ? (current?.introspectionMs ?? 0) : 0
   const toolLabel = tr(t, 'tool.' + shortTool(toolName))
   const brief = makeBrief(t, { toolName, phase, estimateMs, reason, stopMs, block, toolLabel })
   const toolTime = formatTime(block?.time)
@@ -191,7 +191,7 @@ function ToolBubble(props: any) {
             turnLabel === undefined ? null : detailRow(t, 'detail.turn', turnLabel),
             argsRow(t, estimateMs, reason),
             toolName === 'time_introspect_stop' && stopMs > 0
-              ? detailRow(t, 'detail.reflection', formatMs(stopMs))
+              ? detailRow(t, 'detail.introspection', formatMs(stopMs))
               : null,
             toolName === 'time_introspect_shut' || toolName === 'time_introspect_waken'
               ? detailRow(t, 'detail.state', projection?.state ?? '-')

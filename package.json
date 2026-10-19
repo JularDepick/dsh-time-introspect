@@ -29,7 +29,7 @@
     "cordis",
     "plugin",
     "time",
-    "reflection",
+    "introspection",
     "introspect",
     "performance"
   ],

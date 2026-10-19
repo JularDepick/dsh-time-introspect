@@ -31,11 +31,11 @@ const turnSchema = z.object({
   endTime: z.number().nullable(),
   estimateMs: z.number().int().nullable(),
   toolMs: z.record(z.string(), aggregateSchema),
-  reflectionMs: z.number(),
-  reflectionTools: z.record(z.string(), aggregateSchema),
-  reflectionOpen: z.boolean(),
-  reflectionStarted: z.boolean(),
-  reflectionStartTime: z.number().nullable(),
+  introspectionMs: z.number(),
+  introspectionTools: z.record(z.string(), aggregateSchema),
+  introspectionOpen: z.boolean(),
+  introspectionStarted: z.boolean(),
+  introspectionStartTime: z.number().nullable(),
   injectionDone: z.boolean(),
 })
 
@@ -43,7 +43,7 @@ const openCallSchema = z.object({
   name: z.string(),
   time: z.number(),
   arguments: z.string(),
-  inReflection: z.boolean(),
+  inIntrospection: z.boolean(),
 })
 
 /** 投影状态的持久化 schema. */
@@ -109,8 +109,8 @@ function onTurnEnd(state: IntrospectState, turn: number, time: number, config: C
   const previous = state.turns[index]
   if (index < 0 || previous === undefined) return state
   /* 严格配对: 轮次结束时仍未 stop 的窗口丢弃, 窗口内工具回到普通工具分桶. */
-  const settled = previous.reflectionOpen ? foldReflectionTools(previous) : previous
-  const record: TurnRecord = { ...settled, endTime: time, reflectionOpen: false, reflectionStartTime: null }
+  const settled = previous.introspectionOpen ? foldIntrospectionTools(previous) : previous
+  const record: TurnRecord = { ...settled, endTime: time, introspectionOpen: false, introspectionStartTime: null }
   const turns = state.turns.map((candidate, position) => (position === index ? record : candidate))
   return { ...state, turns: turns.slice(-config.maxTurnHistory), openCalls: {} }
 }
@@ -131,12 +131,12 @@ function onToolCall(
 ): IntrospectState {
   const index = findTurnIndex(state.turns, data.turn)
   const record = state.turns[index]
-  const inReflection = record !== undefined && record.reflectionOpen
+  const inIntrospection = record !== undefined && record.introspectionOpen
   const call: OpenCall = {
     name: data.name,
     time,
     arguments: data.arguments,
-    inReflection,
+    inIntrospection,
   }
   return { ...state, openCalls: { ...state.openCalls, [data.callId]: call } }
 }
@@ -167,9 +167,9 @@ function onToolResult(
 
 /** 把一次工具调用的耗时放入对应分桶. start/stop 永远属于普通工具. */
 function addToolUse(record: TurnRecord, call: OpenCall, duration: number): TurnRecord {
-  const reflection = call.inReflection && call.name !== START_TOOL && call.name !== STOP_TOOL
-  if (reflection) {
-    return { ...record, reflectionTools: addAggregate(record.reflectionTools, call.name, duration) }
+  const introspection = call.inIntrospection && call.name !== START_TOOL && call.name !== STOP_TOOL
+  if (introspection) {
+    return { ...record, introspectionTools: addAggregate(record.introspectionTools, call.name, duration) }
   }
   return { ...record, toolMs: addAggregate(record.toolMs, call.name, duration) }
 }
@@ -188,28 +188,28 @@ function applyToolSuccess(
       return { ...state, turns: replaceAt(state.turns, index, { ...record, estimateMs }) }
     }
     case START_TOOL: {
-      if (state.state !== 'active' || !record.injectionDone || record.reflectionOpen || record.reflectionStarted) {
+      if (state.state !== 'active' || !record.injectionDone || record.introspectionOpen || record.introspectionStarted) {
         return { ...state, turns: replaceAt(state.turns, index, record) }
       }
       const started: TurnRecord = {
         ...record,
-        reflectionOpen: true,
-        reflectionStarted: true,
-        reflectionStartTime: time,
-        reflectionMs: 0,
-        reflectionTools: {},
+        introspectionOpen: true,
+        introspectionStarted: true,
+        introspectionStartTime: time,
+        introspectionMs: 0,
+        introspectionTools: {},
       }
       return { ...state, turns: replaceAt(state.turns, index, started) }
     }
     case STOP_TOOL: {
-      if (!record.reflectionOpen) return { ...state, turns: replaceAt(state.turns, index, record) }
-      const startTime = record.reflectionStartTime ?? call.time
-      const reflectionMs = Math.max(0, call.time - startTime)
-      const stopped: TurnRecord = { ...record, reflectionMs, reflectionOpen: false, reflectionStartTime: null }
+      if (!record.introspectionOpen) return { ...state, turns: replaceAt(state.turns, index, record) }
+      const startTime = record.introspectionStartTime ?? call.time
+      const introspectionMs = Math.max(0, call.time - startTime)
+      const stopped: TurnRecord = { ...record, introspectionMs, introspectionOpen: false, introspectionStartTime: null }
       return { ...state, turns: replaceAt(state.turns, index, stopped) }
     }
     case SHUT_TOOL: {
-      const settled = record.reflectionOpen ? foldReflectionTools(record) : record
+      const settled = record.introspectionOpen ? foldIntrospectionTools(record) : record
       return {
         ...state,
         turns: replaceAt(state.turns, index, settled),
@@ -234,19 +234,19 @@ function applyToolSuccess(
   }
 }
 
-function foldReflectionTools(record: TurnRecord): TurnRecord {
+function foldIntrospectionTools(record: TurnRecord): TurnRecord {
   const toolMs = { ...record.toolMs }
-  for (const [name, aggregate] of Object.entries(record.reflectionTools)) {
+  for (const [name, aggregate] of Object.entries(record.introspectionTools)) {
     const previous = toolMs[name] ?? { ms: 0, calls: 0 }
     toolMs[name] = { ms: previous.ms + aggregate.ms, calls: previous.calls + aggregate.calls }
   }
   return {
     ...record,
     toolMs,
-    reflectionMs: 0,
-    reflectionTools: {},
-    reflectionOpen: false,
-    reflectionStartTime: null,
+    introspectionMs: 0,
+    introspectionTools: {},
+    introspectionOpen: false,
+    introspectionStartTime: null,
   }
 }
 
@@ -284,11 +284,11 @@ function newTurnRecord(turn: number, time: number): TurnRecord {
     endTime: null,
     estimateMs: null,
     toolMs: {},
-    reflectionMs: 0,
-    reflectionTools: {},
-    reflectionOpen: false,
-    reflectionStarted: false,
-    reflectionStartTime: null,
+    introspectionMs: 0,
+    introspectionTools: {},
+    introspectionOpen: false,
+    introspectionStarted: false,
+    introspectionStartTime: null,
     injectionDone: false,
   }
 }

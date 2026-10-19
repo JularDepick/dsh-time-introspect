@@ -12,8 +12,8 @@ function plan(overrides = {}) {
     endTime: 53_000,
     estimateMs: 30_000,
     toolMs: { bash: { ms: 30_000, calls: 3 } },
-    reflectionMs: 4_800,
-    reflectionTools: { read: { ms: 1_200, calls: 1 } },
+    introspectionMs: 4_800,
+    introspectionTools: { read: { ms: 1_200, calls: 1 } },
     ...overrides,
   }))
   const value = planInjection(state, 4, makeConfig())
@@ -73,14 +73,14 @@ describe('注入 JSON', () => {
     expect(buckets.reduce((sum, entry) => sum + entry, 0)).toBeCloseTo(1, 10)
     const work = value.time_consume_details.tool.details
     expect(work.reduce((sum, entry) => sum + entry.ratio, 0)).toBeCloseTo(1, 10)
-    const reflection = value.time_consume_details.introspect.details.tool.details
-    expect(reflection.reduce((sum, entry) => sum + entry.ratio, 0)).toBeCloseTo(1, 10)
+    const introspection = value.time_consume_details.introspect.details.tool.details
+    expect(introspection.reduce((sum, entry) => sum + entry.ratio, 0)).toBeCloseTo(1, 10)
   })
 
   test('英文 locale 输出英文 desc', () => {
     const value = buildInjection(plan(), makeConfig({ locale: 'en-US' }))
-    expect(value.time_consume_details.tool.desc).toContain('outside the reflection window')
-    expect(value.time_consume_details.introspect.desc).toContain('inside the reflection window')
+    expect(value.time_consume_details.tool.desc).toContain('outside the introspection window')
+    expect(value.time_consume_details.introspect.desc).toContain('inside the introspection window')
   })
 
   test('重启原因存在时带 waken 对象', () => {

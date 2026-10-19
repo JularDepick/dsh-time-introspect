@@ -12,8 +12,8 @@ describe('planInjection', () => {
       endTime: 53_000,
       estimateMs: 30_000,
       toolMs: { bash: { ms: 30_000, calls: 3 } },
-      reflectionMs: 4_800,
-      reflectionTools: { read: { ms: 1_200, calls: 1 } },
+      introspectionMs: 4_800,
+      introspectionTools: { read: { ms: 1_200, calls: 1 } },
     }))
     const plan = planInjection(state, 4, makeConfig())
     expect(plan).not.toBeNull()
@@ -75,7 +75,7 @@ describe('聚合与状态报告', () => {
       endTime: 53_000,
       estimateMs: 30_000,
       toolMs: { bash: { ms: 30_000, calls: 3 } },
-      reflectionMs: 4_800,
+      introspectionMs: 4_800,
     }))
     const report = buildStatusReport(state)
     expect(report.state).toBe('active')
@@ -91,7 +91,7 @@ describe('聚合与状态报告', () => {
     const report = buildStatusReport(state)
     expect(report.last_turn).toBeNull()
     expect(report.totals).toEqual({ tool_ms: 0, model_ms: 0, introspect_ms: 0 })
-    expect(report.reflection_open).toBe(false)
+    expect(report.introspection_open).toBe(false)
   })
 
   test('没有预估时 overrun 字段为 null', () => {

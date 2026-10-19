@@ -84,11 +84,11 @@ describe('反思窗口', () => {
       end(1, 5_000),
     ])
     const record = state.turns[0]
-    expect(record?.reflectionMs).toBe(1_750)
-    expect(record?.reflectionTools.read).toEqual({ ms: 1_000, calls: 1 })
+    expect(record?.introspectionMs).toBe(1_750)
+    expect(record?.introspectionTools.read).toEqual({ ms: 1_000, calls: 1 })
     expect(record?.toolMs[START_TOOL]).toEqual({ ms: 50, calls: 1 })
     expect(record?.toolMs[STOP_TOOL]).toEqual({ ms: 100, calls: 1 })
-    expect(record?.reflectionOpen).toBe(false)
+    expect(record?.introspectionOpen).toBe(false)
   })
 
   test('没有注入时 start 成功也不开窗', () => {
@@ -97,7 +97,7 @@ describe('反思窗口', () => {
       toolCall(1, 's', START_TOOL, {}, 200),
       toolResult(1, 's', 250),
     ])
-    expect(state.turns[0]?.reflectionOpen).toBe(false)
+    expect(state.turns[0]?.introspectionOpen).toBe(false)
   })
 
   test('同一轮 stop 后不能再次开始', () => {
@@ -112,9 +112,9 @@ describe('反思窗口', () => {
       toolResult(1, 's2', 750),
     ])
     const record = state.turns[0]
-    expect(record?.reflectionStarted).toBe(true)
-    expect(record?.reflectionOpen).toBe(false)
-    expect(record?.reflectionMs).toBe(350)
+    expect(record?.introspectionStarted).toBe(true)
+    expect(record?.introspectionOpen).toBe(false)
+    expect(record?.introspectionMs).toBe(350)
   })
 
   test('没有开始就 stop 不产生窗口', () => {
@@ -124,8 +124,8 @@ describe('反思窗口', () => {
       toolCall(1, 'p', STOP_TOOL, {}, 2_000),
       toolResult(1, 'p', 2_100),
     ])
-    expect(state.turns[0]?.reflectionOpen).toBe(false)
-    expect(state.turns[0]?.reflectionMs).toBe(0)
+    expect(state.turns[0]?.introspectionOpen).toBe(false)
+    expect(state.turns[0]?.introspectionMs).toBe(0)
   })
 
   test('轮次结束仍未 stop 的窗口丢弃, 工具回到普通分桶', () => {
@@ -139,10 +139,10 @@ describe('反思窗口', () => {
       end(1, 5_000),
     ])
     const record = state.turns[0]
-    expect(record?.reflectionMs).toBe(0)
-    expect(record?.reflectionTools).toEqual({})
+    expect(record?.introspectionMs).toBe(0)
+    expect(record?.introspectionTools).toEqual({})
     expect(record?.toolMs.read).toEqual({ ms: 1_000, calls: 1 })
-    expect(record?.reflectionOpen).toBe(false)
+    expect(record?.introspectionOpen).toBe(false)
   })
 })
 
@@ -160,8 +160,8 @@ describe('休眠与重启', () => {
     ])
     const record = state.turns[0]
     expect(state.state).toBe('dormant')
-    expect(record?.reflectionOpen).toBe(false)
-    expect(record?.reflectionMs).toBe(0)
+    expect(record?.introspectionOpen).toBe(false)
+    expect(record?.introspectionMs).toBe(0)
     expect(record?.toolMs.read).toEqual({ ms: 1_000, calls: 1 })
     expect(state.wakenPending).toBe(false)
   })

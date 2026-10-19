@@ -78,7 +78,7 @@
 
 返回结构化结果并渲染为 JSON:
 
-- `state`, `dormant`, `reflection_open`
+- `state`, `dormant`, `introspection_open`
 - `last_turn`: 轮次, 预估, 实际, 超出量, 超出比例, 实际总耗时
 - `totals`: `tool_ms`, `model_ms`, `introspect_ms`
 

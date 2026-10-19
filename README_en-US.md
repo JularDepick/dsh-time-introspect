@@ -10,7 +10,7 @@
 
 </div>
 
-A time-reflection plugin for dsh: when the previous turn exceeded the model's estimate, a complete time distribution is injected as JSON in the next turn, and the model decides whether to reflect. Reflection starts and stops through explicit tool calls, and the plugin only measures and accounts; it never auto-cools or auto-sleeps. Whether to go quiet is the model's decision.
+A time-introspection plugin for dsh: when the previous turn exceeded the model's estimate, a complete time distribution is injected as JSON in the next turn, and the model decides whether to introspect. Introspection starts and stops through explicit tool calls, and the plugin only measures and accounts; it never auto-cools or auto-sleeps. Whether to go quiet is the model's decision.
 
 Supports dsh 0.2.0-rc.2, 0.2.1-rc.1 and 0.2.1-rc.2
 
@@ -19,9 +19,9 @@ Supports dsh 0.2.0-rc.2, 0.2.1-rc.1 and 0.2.1-rc.2
 ## Features
 
 - Overrun-triggered: injection happens once at step 1 of the next turn only when the previous turn has an estimate and its actual duration exceeds both a ratio (`minOverrunRatio`, default 20%) and an absolute floor (`minOverrunMs`, default 5000 ms)
-- Complete JSON: the injection is structured JSON with totals, per-tool time, model self-processing, and reflection internals; every tool is listed individually, with no top-N folding
-- Explicit reflection boundaries: the model calls `time_introspect_start` and `time_introspect_stop`; the plugin measures between those positions, so the model never compiles or reports timing data
-- Self-billed reflection: all time inside the reflection window counts as reflection cost; tools used inside it are listed under `introspect` so the model can judge whether reflection paid off
+- Complete JSON: the injection is structured JSON with totals, per-tool time, model self-processing, and introspection internals; every tool is listed individually, with no top-N folding
+- Explicit introspection boundaries: the model calls `time_introspect_start` and `time_introspect_stop`; the plugin measures between those positions, so the model never compiles or reports timing data
+- Self-billed introspection: all time inside the introspection window counts as introspection cost; tools used inside it are listed under `introspect` so the model can judge whether introspection paid off
 - Model-controlled sleep: `time_introspect_shut` puts the plugin to sleep and `time_introspect_waken` restores it; there is no automatic cooling or dormancy
 - In-transcript red-dot bubbles: every call to this plugin's tools shows a red dot at that call position; a new call expands a one-line hint for 3 seconds, then collapses while the dot stays; click the dot to expand or collapse details
 - Status query: `time_introspect_status` returns read-only state, the last turn totals, and the three top-level totals
@@ -34,7 +34,7 @@ Supports dsh 0.2.0-rc.2, 0.2.1-rc.1 and 0.2.1-rc.2
 ```json
 {
   "type": "time_introspect",
-  "desc": "This JSON was generated automatically by the dsh-time-introspect plugin and describes the previous turn time distribution. Whether to reflect is your decision; call time_introspect_start to begin and time_introspect_stop when done.",
+  "desc": "This JSON was generated automatically by the dsh-time-introspect plugin and describes the previous turn time distribution. Whether to introspect is your decision; call time_introspect_start to begin and time_introspect_stop when done.",
   "turn": 3,
   "waken": { "reason": "three turns of redundant tool calls; work is getting harder" },
   "estimate_ms": 100000,
@@ -43,7 +43,7 @@ Supports dsh 0.2.0-rc.2, 0.2.1-rc.1 and 0.2.1-rc.2
   "time_consume_total_ms": 130000,
   "time_consume_details": {
     "tool": {
-      "desc": "Tool time outside the reflection window. Tool calls made during reflection are excluded. Calls to this plugin's own tools outside the window, including the start and stop boundary tools, are included.",
+      "desc": "Tool time outside the introspection window. Tool calls made during introspection are excluded. Calls to this plugin's own tools outside the window, including the start and stop boundary tools, are included.",
       "ratio": 0.0769,
       "total_ms": 10000,
       "details": [
@@ -54,14 +54,14 @@ Supports dsh 0.2.0-rc.2, 0.2.1-rc.1 and 0.2.1-rc.2
         { "name": "time_introspect_stop", "calls": 1, "ms": 700, "ratio": 0.07 }
       ]
     },
-    "model": { "desc": "Model processing and waiting outside the reflection window. Model time inside reflection and all tool time are excluded.", "ratio": 0.7693, "total_ms": 100000 },
+    "model": { "desc": "Model processing and waiting outside the introspection window. Model time inside introspection and all tool time are excluded.", "ratio": 0.7693, "total_ms": 100000 },
     "introspect": {
-      "desc": "All time inside the reflection window, including tool calls (this plugin's tools included) and model processing. The start and stop tools themselves sit outside the window and are not included.",
+      "desc": "All time inside the introspection window, including tool calls (this plugin's tools included) and model processing. The start and stop tools themselves sit outside the window and are not included.",
       "ratio": 0.1538,
       "total_ms": 20000,
       "details": {
         "tool": {
-          "desc": "Tool time inside the reflection window, including this plugin's tools called inside it. The start and stop tools themselves sit outside the window and are not included.",
+          "desc": "Tool time inside the introspection window, including this plugin's tools called inside it. The start and stop tools themselves sit outside the window and are not included.",
           "ratio": 0.3,
           "total_ms": 6000,
           "details": [
@@ -69,14 +69,14 @@ Supports dsh 0.2.0-rc.2, 0.2.1-rc.1 and 0.2.1-rc.2
             { "name": "read", "calls": 2, "ms": 1000, "ratio": 0.1667 }
           ]
         },
-        "model": { "desc": "Model processing and waiting inside the reflection window, excluding tool time.", "ratio": 0.7, "total_ms": 14000 }
+        "model": { "desc": "Model processing and waiting inside the introspection window, excluding tool time.", "ratio": 0.7, "total_ms": 14000 }
       }
     }
   }
 }
 ```
 
-`waken` appears only in the first injection after a model restart. Every time layer carries a `desc` explaining whether it contains reflection tools and this plugin's tools. Each layer keeps four decimal places, with the rounding remainder assigned to its largest entry.
+`waken` appears only in the first injection after a model restart. Every time layer carries a `desc` explaining whether it contains introspection tools and this plugin's tools. Each layer keeps four decimal places, with the rounding remainder assigned to its largest entry.
 
 ## Install
 
@@ -91,13 +91,13 @@ dsh plugin --profile <name> add dsh-time-introspect
 | Tool | Parameters | Behavior |
 |:---:|:---|:---|
 | `time_introspect_estimate` | `estimateMs` | Record this turn estimate; the last call wins |
-| `time_introspect_start` | none | Start reflection; requires an injection in this turn, and fails if a window is already open |
-| `time_introspect_stop` | none | Stop reflection; fails when no window is open |
+| `time_introspect_start` | none | Start introspection; requires an injection in this turn, and fails if a window is already open |
+| `time_introspect_stop` | none | Stop introspection; fails when no window is open |
 | `time_introspect_shut` | `reason` | Sleep; idempotent when already dormant, discards an open window |
 | `time_introspect_waken` | `reason` | Wake; idempotent when already active |
 | `time_introspect_status` | none | Read-only state and last-turn totals |
 
-Every tool name carries the `time_introspect_` prefix. The plugin blocks no tool call and never checks whether reflection was actually completed.
+Every tool name carries the `time_introspect_` prefix. The plugin blocks no tool call and never checks whether introspection was actually completed.
 
 ## Configuration
 
@@ -123,8 +123,8 @@ The bubble auto-expand duration is fixed at 3 seconds, and the history auto-expa
 
 - Actual duration: `turn/end` event time minus `turn/start` event time
 - Tool duration: `tool/call` and `tool/result` paired by `callId`
-- Reflection window: from the `time_introspect_start` result to the `time_introspect_stop` call
-- All time inside the reflection window counts as reflection cost; ordinary and plugin tools inside it appear under `introspect.details.tool` and not in the top-level `tool.details`
+- Introspection window: from the `time_introspect_start` result to the `time_introspect_stop` call
+- All time inside the introspection window counts as introspection cost; ordinary and plugin tools inside it appear under `introspect.details.tool` and not in the top-level `tool.details`
 - This plugin's own tools appear in `tool.details` like any other tool; there is no separate plugin overhead line
 - Top-level relation: `time_consume_total_ms = tool.total_ms + model.total_ms + introspect.total_ms`
 - Each layer `ratio` is relative to its parent total, four decimals, with the rounding remainder assigned to the largest entry
@@ -135,7 +135,7 @@ The bubble auto-expand duration is fixed at 3 seconds, and the history auto-expa
 | State | Behavior | Enter | Leave |
 |:---:|:---|:---|:---|
 | active | Judge and inject | Initial state, or a model wake | The model calls `time_introspect_shut` |
-| dormant | No injection, no reflection accounting | The model calls `time_introspect_shut` | The model calls `time_introspect_waken` |
+| dormant | No injection, no introspection accounting | The model calls `time_introspect_shut` | The model calls `time_introspect_waken` |
 
 There is no automatic cooling or dormancy. Whether the plugin goes quiet is the model's decision.
 
@@ -146,12 +146,12 @@ There is no automatic cooling or dormancy. Whether the plugin goes quiet is the 
 - A new call auto-expands a one-line hint for 3 seconds, then collapses; the dot remains
 - Only calls within 15 seconds of mount auto-expand; calls in history show the dot only, so opening an old session does not pop many bubbles at once
 - Click the dot to expand or collapse details; an expanded bubble stays open until clicked again
-- Details include tool, phase, time, turn, arguments and result; stopping reflection shows the reflection cost, and status queries show the result JSON
+- Details include tool, phase, time, turn, arguments and result; stopping introspection shows the introspection cost, and status queries show the result JSON
 - Text follows the Web UI language
 
 ## Relationship to clock plugins
 
-This plugin does not replace `dsh-time-context` or `dsh-time-reminder`. Those make the model aware of time; this plugin tells it where the time went after an overrun and gives reflection itself a cost. All three can be mounted together.
+This plugin does not replace `dsh-time-context` or `dsh-time-reminder`. Those make the model aware of time; this plugin tells it where the time went after an overrun and gives introspection itself a cost. All three can be mounted together.
 
 ## Compatibility
 

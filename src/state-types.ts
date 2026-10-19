@@ -18,13 +18,13 @@ export interface TurnRecord {
   /** 反思窗口外的工具耗时. */
   toolMs: Record<string, ToolAggregate>
   /** 反思窗口的可观测总时长. */
-  reflectionMs: number
+  introspectionMs: number
   /** 反思窗口内的工具耗时, 用于反思内部明细. */
-  reflectionTools: Record<string, ToolAggregate>
-  reflectionOpen: boolean
+  introspectionTools: Record<string, ToolAggregate>
+  introspectionOpen: boolean
   /** 本轮是否已经用过一次反思机会; 关闭后也不再允许重新开始. */
-  reflectionStarted: boolean
-  reflectionStartTime: number | null
+  introspectionStarted: boolean
+  introspectionStartTime: number | null
   /** 本轮是否已经注入过耗时报告. */
   injectionDone: boolean
 }
@@ -35,7 +35,7 @@ export interface OpenCall {
   time: number
   arguments: string
   /** 调用开始时是否处于反思窗口内. */
-  inReflection: boolean
+  inIntrospection: boolean
 }
 
 /** 逐会话折叠状态. */

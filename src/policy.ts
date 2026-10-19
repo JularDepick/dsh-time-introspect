@@ -64,7 +64,7 @@ export function planInjection(state: IntrospectState, turn: number, config: Conf
   const overrunRatio = overrunMs / record.estimateMs
   if (overrunMs < config.minOverrunMs || overrunRatio < config.minOverrunRatio) return null
   const toolTotalMs = aggregateTotal(record.toolMs)
-  const introspectTotalMs = Math.max(0, record.reflectionMs)
+  const introspectTotalMs = Math.max(0, record.introspectionMs)
   const modelTotalMs = Math.max(0, actualMs - toolTotalMs - introspectTotalMs)
   return {
     record,
@@ -92,7 +92,7 @@ export interface StatusLastTurn {
 export interface StatusReport {
   state: 'active' | 'dormant'
   dormant: boolean
-  reflection_open: boolean
+  introspection_open: boolean
   last_turn: StatusLastTurn | null
   totals: {
     tool_ms: number
@@ -109,14 +109,14 @@ export function buildStatusReport(state: IntrospectState): StatusReport {
     return {
       state: state.state,
       dormant: state.state === 'dormant',
-      reflection_open: current?.reflectionOpen === true,
+      introspection_open: current?.introspectionOpen === true,
       last_turn: null,
       totals: { tool_ms: 0, model_ms: 0, introspect_ms: 0 },
     }
   }
   const actualMs = Math.max(0, completed.endTime - completed.startTime)
   const toolMs = aggregateTotal(completed.toolMs)
-  const introspectMs = Math.max(0, completed.reflectionMs)
+  const introspectMs = Math.max(0, completed.introspectionMs)
   const modelMs = Math.max(0, actualMs - toolMs - introspectMs)
   const estimateMs = completed.estimateMs
   const overrunMs = estimateMs === null ? null : actualMs - estimateMs
@@ -126,7 +126,7 @@ export function buildStatusReport(state: IntrospectState): StatusReport {
   return {
     state: state.state,
     dormant: state.state === 'dormant',
-    reflection_open: current?.reflectionOpen === true,
+    introspection_open: current?.introspectionOpen === true,
     last_turn: {
       turn: completed.turn,
       estimate_ms: estimateMs,

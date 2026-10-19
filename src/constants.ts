@@ -10,7 +10,7 @@ export const SOURCE_KIND = PLUGIN_NAME
 export const PROJECTION_KEY = 'timeIntrospect'
 
 /** 投影状态版本; 折叠语义或字段变化时递增. */
-export const PROJECTION_STATE_VERSION = 2
+export const PROJECTION_STATE_VERSION = 3
 
 /** 工具名统一前缀. */
 export const TOOL_PREFIX = 'time_introspect_'

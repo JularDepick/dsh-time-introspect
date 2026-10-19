@@ -96,7 +96,7 @@ export function registerTools(ctx: Context, config: Config): void {
           additionalProperties: false,
         },
         render: () => [
-          { type: 'text', text: zh ? '反思计时已开始.' : 'Reflection timing started.' },
+          { type: 'text', text: zh ? '反思计时已开始.' : 'Introspection timing started.' },
         ],
       },
       isConcurrencySafe: () => false,
@@ -116,11 +116,11 @@ export function registerTools(ctx: Context, config: Config): void {
           throw new Error(
             zh
               ? '本轮尚未收到耗时报告, 不能开始反思.'
-              : 'No time report has arrived in this turn, so reflection cannot start.',
+              : 'No time report has arrived in this turn, so introspection cannot start.',
           )
         }
-        if (record.reflectionOpen || record.reflectionStarted) {
-          throw new Error(zh ? '本轮反思已经开始.' : 'Reflection has already started in this turn.')
+        if (record.introspectionOpen || record.introspectionStarted) {
+          throw new Error(zh ? '本轮反思已经开始.' : 'Introspection has already started in this turn.')
         }
         return { started: true }
       },
@@ -141,7 +141,7 @@ export function registerTools(ctx: Context, config: Config): void {
           additionalProperties: false,
         },
         render: () => [
-          { type: 'text', text: zh ? '反思计时已结束.' : 'Reflection timing stopped.' },
+          { type: 'text', text: zh ? '反思计时已结束.' : 'Introspection timing stopped.' },
         ],
       },
       isConcurrencySafe: () => false,
@@ -150,8 +150,8 @@ export function registerTools(ctx: Context, config: Config): void {
         requireMain(session)
         const state = readState(session)
         const record = currentTurn(state)
-        if (record === undefined || !record.reflectionOpen) {
-          throw new Error(zh ? '当前没有进行中的反思.' : 'No reflection is currently open.')
+        if (record === undefined || !record.introspectionOpen) {
+          throw new Error(zh ? '当前没有进行中的反思.' : 'No introspection is currently open.')
         }
         return { stopped: true }
       },
@@ -241,7 +241,7 @@ export function registerTools(ctx: Context, config: Config): void {
           properties: {
             state: { type: 'string', required: true },
             dormant: { type: 'boolean', required: true },
-            reflection_open: { type: 'boolean', required: true },
+            introspection_open: { type: 'boolean', required: true },
             last_turn: {
               required: true,
               oneOf: [

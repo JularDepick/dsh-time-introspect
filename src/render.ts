@@ -114,21 +114,21 @@ export function buildInjection(plan: InjectionPlan, config: Config): InjectionJs
   const actual = plan.actualMs
   const outerRatios = distributedRatios([plan.toolTotalMs, plan.modelTotalMs, plan.introspectTotalMs])
   const workEntries = toolEntries(plan.record.toolMs, plan.toolTotalMs)
-  const reflectionDetails = plan.introspectTotalMs > 0
-    ? capEntries(toolEntries(plan.record.reflectionTools), plan.introspectTotalMs)
+  const introspectionDetails = plan.introspectTotalMs > 0
+    ? capEntries(toolEntries(plan.record.introspectionTools), plan.introspectTotalMs)
     : []
-  const cappedToolTotal = reflectionDetails.reduce((sum, entry) => sum + entry.ms, 0)
-  const reflectionModel = Math.max(0, plan.introspectTotalMs - cappedToolTotal)
-  const innerRatios = distributedRatios([cappedToolTotal, reflectionModel])
-  const detailRatios = distributedRatios(reflectionDetails.map((entry) => entry.ms))
-  const details = reflectionDetails.map((entry, index) => ({
+  const cappedToolTotal = introspectionDetails.reduce((sum, entry) => sum + entry.ms, 0)
+  const introspectionModel = Math.max(0, plan.introspectTotalMs - cappedToolTotal)
+  const innerRatios = distributedRatios([cappedToolTotal, introspectionModel])
+  const detailRatios = distributedRatios(introspectionDetails.map((entry) => entry.ms))
+  const details = introspectionDetails.map((entry, index) => ({
     ...entry,
     ratio: cappedToolTotal > 0 ? (detailRatios[index] ?? 0) : 0,
   }))
   const value: InjectionJson = {
     type: 'time_introspect',
     desc: config.locale === 'en-US'
-      ? `This JSON was generated automatically by dsh-time-introspect and describes the previous turn time distribution. Whether to reflect is your decision; call ${START_TOOL} to begin and ${STOP_TOOL} when done.`
+      ? `This JSON was generated automatically by dsh-time-introspect and describes the previous turn time distribution. Whether to introspect is your decision; call ${START_TOOL} to begin and ${STOP_TOOL} when done.`
       : `本 JSON 由 dsh-time-introspect 插件自动统计生成, 内容是上一轮任务的耗时分布报告. 是否据此反思由你决定; 如需反思, 调用 ${START_TOOL} 开始, 完成后调用 ${STOP_TOOL}.`,
     turn: plan.record.turn,
     ...(plan.wakenReason !== null && plan.wakenReason.length > 0 ? { waken: { reason: plan.wakenReason } } : {}),
@@ -162,7 +162,7 @@ export function buildInjection(plan: InjectionPlan, config: Config): InjectionJs
           model: {
             desc: copy.introspectModel,
             ratio: innerRatios[1] ?? 0,
-            total_ms: reflectionModel,
+            total_ms: introspectionModel,
           },
         },
       },
@@ -227,11 +227,11 @@ export interface CategoryDescriptions {
 export function categoryDescriptions(locale: Config['locale']): CategoryDescriptions {
   if (locale === 'en-US') {
     return {
-      tool: 'Tool time outside the reflection window. Tool calls made during reflection are excluded. Calls to this plugin\'s own tools, including the start and stop boundary tools, are included.',
-      model: 'Model processing and waiting outside the reflection window. Model time inside reflection and all tool time are excluded.',
-      introspect: 'All time inside the reflection window, including tool calls (this plugin\'s tools included) and model processing. The start and stop tools themselves sit outside the window and are not included.',
-      introspectTool: 'Tool time inside the reflection window, including this plugin\'s tools. The start and stop tools themselves sit outside the window and are not included.',
-      introspectModel: 'Model processing and waiting inside the reflection window, excluding tool time.',
+      tool: 'Tool time outside the introspection window. Tool calls made during introspection are excluded. Calls to this plugin\'s own tools, including the start and stop boundary tools, are included.',
+      model: 'Model processing and waiting outside the introspection window. Model time inside introspection and all tool time are excluded.',
+      introspect: 'All time inside the introspection window, including tool calls (this plugin\'s tools included) and model processing. The start and stop tools themselves sit outside the window and are not included.',
+      introspectTool: 'Tool time inside the introspection window, including this plugin\'s tools. The start and stop tools themselves sit outside the window and are not included.',
+      introspectModel: 'Model processing and waiting inside the introspection window, excluding tool time.',
     }
   }
   return {
@@ -262,9 +262,9 @@ export function toolDescriptions(locale: Config['locale']): ToolDescriptions {
     return {
       estimate: 'Record the estimated duration of this turn in milliseconds. Only turns with an estimate can receive a time distribution after an overrun. The last call in a turn wins.',
       estimateArg: 'Estimated duration of this turn in milliseconds.',
-      start: 'Start reflection timing. An injection must have arrived in this turn, and a turn allows one reflection. While dormant, call waken first. Tools called while the window is open are grouped under the reflection breakdown.',
-      stop: 'Stop reflection timing. Fails when no reflection window is open. The next injection reports the reflection cost.',
-      shut: 'Put the plugin to sleep. No injection happens until waken is called. Sleeping discards an open reflection window.',
+      start: 'Start introspection timing. An injection must have arrived in this turn, and a turn allows one introspection. While dormant, call waken first. Tools called while the window is open are grouped under the introspection breakdown.',
+      stop: 'Stop introspection timing. Fails when no introspection window is open. The next injection reports the introspection cost.',
+      shut: 'Put the plugin to sleep. No injection happens until waken is called. Sleeping discards an open introspection window.',
       shutArg: 'Why the plugin should sleep. Shown to the user and carried in the next injection.',
       waken: 'Wake the plugin. The first injection after a wake carries your reason. Idempotent when already active.',
       wakenArg: 'Why the plugin should wake. Shown to the user and carried in the next injection.',
