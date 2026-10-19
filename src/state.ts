@@ -7,6 +7,7 @@ import type { Config } from './config.js'
 import {
   ESTIMATE_ARGUMENT_KEY,
   ESTIMATE_TOOL,
+  MAX_ARCHIVE_TURNS,
   MAX_ESTIMATE_MS,
   MAX_REASON_CHARS,
   PROJECTION_KEY,
@@ -18,6 +19,8 @@ import {
   WAKEN_TOOL,
 } from './constants.js'
 import type { IntrospectState, OpenCall, ToolAggregate, TurnRecord } from './state-types.js'
+import type { InjectionRecord } from './report-types.js'
+import { buildArchiveEntry } from './render.js'
 import './types.js'
 
 const aggregateSchema = z.object({
@@ -39,6 +42,20 @@ const turnSchema = z.object({
   injectionDone: z.boolean(),
 })
 
+const injectionSchema = z.object({
+  turn: z.number().int(),
+  time: z.number(),
+  aboutTurn: z.number().int(),
+  estimate_ms: z.number().int().nullable(),
+  actual_ms: z.number(),
+  overrun_ms: z.number().int().nullable(),
+  overrun_ratio: z.number().nullable(),
+  started: z.boolean(),
+  completed: z.boolean(),
+  introspection_ms: z.number(),
+  outcome: z.enum(['pending', 'open', 'completed', 'incomplete', 'not_started', 'aborted']),
+})
+
 const openCallSchema = z.object({
   name: z.string(),
   time: z.number(),
@@ -53,6 +70,8 @@ export const introspectStateSchema = z.object({
   state: z.enum(['active', 'dormant']),
   wakenPending: z.boolean(),
   wakenReason: z.string().nullable(),
+  archive: z.array(z.any()),
+  injections: z.array(injectionSchema),
 })
 
 /** 空日志对应的初始状态. */
@@ -63,6 +82,8 @@ export function initialIntrospectState(): IntrospectState {
     state: 'active',
     wakenPending: false,
     wakenReason: null,
+    archive: [],
+    injections: [],
   }
 }
 
@@ -85,7 +106,7 @@ export function reduceIntrospect(state: IntrospectState, event: SessionEvent, co
     case 'turn/end':
       return onTurnEnd(state, event.data.turn, event.time, config)
     case 'user/message':
-      return onUserMessage(state, event.data.source)
+      return onUserMessage(state, event.data.source, event.time)
     case 'tool/call':
       return onToolCall(state, event.data, event.time)
     case 'tool/result':
@@ -112,16 +133,51 @@ function onTurnEnd(state: IntrospectState, turn: number, time: number, config: C
   const settled = previous.introspectionOpen ? foldIntrospectionTools(previous) : previous
   const record: TurnRecord = { ...settled, endTime: time, introspectionOpen: false, introspectionStartTime: null }
   const turns = state.turns.map((candidate, position) => (position === index ? record : candidate))
-  return { ...state, turns: turns.slice(-config.maxTurnHistory), openCalls: {} }
+  const archive = [...state.archive, buildArchiveEntry(record, config, state.wakenPending ? state.wakenReason : null)]
+    .slice(-MAX_ARCHIVE_TURNS)
+  return {
+    ...state,
+    turns: turns.slice(-config.maxTurnHistory),
+    archive,
+    injections: finalizeInjections(state.injections, turn).slice(-MAX_ARCHIVE_TURNS),
+    openCalls: {},
+  }
 }
 
-function onUserMessage(state: IntrospectState, source: { readonly kind: string }): IntrospectState {
+function onUserMessage(
+  state: IntrospectState,
+  source: { readonly kind: string },
+  time: number,
+): IntrospectState {
   if (source.kind !== SOURCE_KIND) return state
   const index = findCurrentTurnIndex(state.turns)
-  const turns = index < 0
+  const current = state.turns[index]
+  const turns = current === undefined
     ? state.turns
     : state.turns.map((candidate, position) => (position === index ? { ...candidate, injectionDone: true } : candidate))
-  return { ...state, turns, wakenPending: false, wakenReason: null }
+  let injections = state.injections
+  if (current !== undefined && !state.injections.some((record) => record.turn === current.turn)) {
+    const previous = previousCompletedTurn(state.turns, current.turn)
+    const actual = previous === null || previous.endTime === null ? 0 : Math.max(0, previous.endTime - previous.startTime)
+    const estimate = previous?.estimateMs ?? null
+    const overrun = estimate === null ? null : actual - estimate
+    const ratio = estimate === null || estimate <= 0 || overrun === null ? null : overrun / estimate
+    const record: InjectionRecord = {
+      turn: current.turn,
+      time,
+      aboutTurn: previous?.turn ?? current.turn - 1,
+      estimate_ms: estimate,
+      actual_ms: actual,
+      overrun_ms: overrun,
+      overrun_ratio: ratio,
+      started: false,
+      completed: false,
+      introspection_ms: 0,
+      outcome: 'pending',
+    }
+    injections = [...state.injections, record].slice(-MAX_ARCHIVE_TURNS)
+  }
+  return { ...state, turns, injections, wakenPending: false, wakenReason: null }
 }
 
 function onToolCall(
@@ -199,14 +255,26 @@ function applyToolSuccess(
         introspectionMs: 0,
         introspectionTools: {},
       }
-      return { ...state, turns: replaceAt(state.turns, index, started) }
+      return {
+        ...state,
+        turns: replaceAt(state.turns, index, started),
+        injections: updateInjection(state.injections, record.turn, { started: true, outcome: 'open' }),
+      }
     }
     case STOP_TOOL: {
       if (!record.introspectionOpen) return { ...state, turns: replaceAt(state.turns, index, record) }
       const startTime = record.introspectionStartTime ?? call.time
       const introspectionMs = Math.max(0, call.time - startTime)
       const stopped: TurnRecord = { ...record, introspectionMs, introspectionOpen: false, introspectionStartTime: null }
-      return { ...state, turns: replaceAt(state.turns, index, stopped) }
+      return {
+        ...state,
+        turns: replaceAt(state.turns, index, stopped),
+        injections: updateInjection(state.injections, record.turn, {
+          completed: true,
+          introspection_ms: introspectionMs,
+          outcome: 'completed',
+        }),
+      }
     }
     case SHUT_TOOL: {
       const settled = record.introspectionOpen ? foldIntrospectionTools(record) : record
@@ -216,6 +284,7 @@ function applyToolSuccess(
         state: 'dormant',
         wakenPending: false,
         wakenReason: null,
+        injections: settleInjectionOnShut(state.injections, record.turn),
       }
     }
     case WAKEN_TOOL: {
@@ -232,6 +301,39 @@ function applyToolSuccess(
     default:
       return { ...state, turns: replaceAt(state.turns, index, record) }
   }
+}
+
+function updateInjection(
+  injections: InjectionRecord[],
+  turn: number,
+  update: Partial<InjectionRecord>,
+): InjectionRecord[] {
+  return injections.map((record) => (record.turn === turn ? { ...record, ...update } : record))
+}
+
+function finalizeInjections(injections: InjectionRecord[], turn: number): InjectionRecord[] {
+  return injections.map((record) => {
+    if (record.turn !== turn || record.outcome === 'completed' || record.outcome === 'aborted') return record
+    if (!record.started) return { ...record, outcome: 'not_started' }
+    if (!record.completed) return { ...record, outcome: 'incomplete' }
+    return record
+  })
+}
+
+function settleInjectionOnShut(injections: InjectionRecord[], turn: number): InjectionRecord[] {
+  return injections.map((record) => {
+    if (record.turn !== turn || record.outcome === 'completed') return record
+    if (record.started && !record.completed) return { ...record, outcome: 'aborted' }
+    return { ...record, outcome: 'not_started' }
+  })
+}
+
+function previousCompletedTurn(turns: readonly TurnRecord[], turn: number): TurnRecord | null {
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const candidate = turns[index]
+    if (candidate !== undefined && candidate.turn < turn && candidate.endTime !== null) return candidate
+  }
+  return null
 }
 
 function foldIntrospectionTools(record: TurnRecord): TurnRecord {

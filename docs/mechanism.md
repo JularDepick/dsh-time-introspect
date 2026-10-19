@@ -27,7 +27,9 @@
 
 - 每轮记录: 开始与结束时间, 预估, 按工具聚合的耗时, 反思窗口, 反思内部工具与模型时间
 - 跨轮状态: `active` 或 `dormant`, 待展示的重启标记, 是否已注入过
-- 完成轮次按 `maxTurnHistory` 截断, 未配对调用在轮次结束时清空
+- 每轮归档: 与注入 JSON 同结构的报告记录, 未触发注入时总账字段为 `null`
+- 注入记录: 每次注入的轮次, 被统计轮次, 预估与实际, 是否开始与结束反思, 反思耗时与最终状态
+- 完成轮次按 `maxTurnHistory` 截断; 归档与注入记录分别按 200 条截断; 未配对调用在轮次结束时清空
 
 状态在进程重启后由日志重放自动重建.
 
@@ -74,6 +76,26 @@
 
 `details` 数组每个对象占一行; 全部工具逐个列出, 不设 top N. `desc` 只说明 JSON 是什么, 不披露数据. 文案语言由 `locale` 控制.
 
+## 归档与落盘
+
+- 每个主会话 `turn/end` 都生成一条归档; 归档只进入会话投影与 profile 文件, 不进入模型上下文, 也不参与注入判定
+- 归档结构与注入 JSON 相同; 未触发注入的轮次 `estimate_ms`, `overrun_ms`, `overrun_ratio` 为 `null`
+- 文件路径为 `$DSH_HOME/profiles/<profile>/time-introspect/<sessionId>.json`; 内容包含 `sessionId`, `updatedAt`, `archive` 与 `injections` 两个数组
+- 写盘由 `session/event` 的 `turn/end` 触发, 通过 `queueMicrotask` 等投影更新后读取状态; 同一文件的写入按队列串行并原子替换
+- profile 目录优先从运行期 `baseUrl` 向上查找 `profiles/<name>`; 找不到时回退到 `DSH_HOME` 下 bundle 清单含本插件的 profile
+- 写盘失败只记录告警, 不影响注入或 agent; 归档最多保留 200 轮
+
+注入记录的状态:
+
+| 状态 | 含义 |
+|:---:|:---|
+| `pending` | 注入已出现, 当前轮尚未结束, 还没开始反思 |
+| `open` | 已 `start`, 反思窗口打开 |
+| `completed` | `start` 与 `stop` 都完成 |
+| `incomplete` | 已 `start`, 但轮次结束前没有 `stop` |
+| `not_started` | 注入后没有 `start` |
+| `aborted` | 反思窗口被 `shut` 丢弃 |
+
 ## 状态查询
 
 返回结构化结果并渲染为 JSON:
@@ -96,7 +118,18 @@
 - 崩溃恢复产生的合成 closer 复用最后事件时间, 零时长轮次被跳过
 - 一轮最多一次反思; 跨轮窗口丢弃
 - 没有自动冷却或自动休眠; 是否安静完全取决于模型是否调用 `time_introspect_shut`
-- 反思窗口开启后轮次结束仍未 stop 的, 不记账
+- 反思窗口开启后轮次结束仍未 stop 的, 不记账, 注入记录标记为 `incomplete`
+- profile 目录无法解析时只跳过写盘, 归档仍保留在会话投影中
+
+## 自省 Tab
+
+会话区域通过 `conversation.view` 注册"耗时自省"视图, 与对话, 轨迹等视图并列:
+
+- 上半部分按轮倒序展示归档; 每张卡片默认收起, 点击后显示预估, 实际, 超出比例与三类耗时
+- 工具 `details` 数组默认收起; 展开卡片后可继续点击"展开明细"查看工具明细与反思内工具明细
+- 下半部分按注入倒序展示反思记录; 每条显示注入轮次, 被统计轮次, 反思状态与反思耗时
+- 卡片与记录都可展开/收起; Tab 数据通过 `useProjection` 读取当前会话投影, 随事件实时更新
+- 文件是持久化镜像, Tab 不依赖额外 HTTP 路由
 
 ## 用户可见气泡
 
@@ -113,15 +146,17 @@
 
 | 文件 | 职责 |
 |:---:|:---|
-| `src/index.ts` | 插件入口: 装配投影与工具, 注册 pre-step 监听器 |
+| `src/index.ts` | 插件入口: 装配投影, 工具, pre-step 与归档写盘监听器 |
 | `src/config.ts` | 配置 schema 与加载期校验 |
-| `src/state.ts` | 投影定义与纯折叠函数 |
+| `src/state.ts` | 投影定义, 纯折叠函数, 归档与注入记录 |
 | `src/policy.ts` | 注入判定与状态迁移 |
-| `src/render.ts` | JSON 注入与状态结果渲染 |
+| `src/render.ts` | JSON 注入, 归档 JSON 与状态结果渲染 |
+| `src/archive.ts` | profile 归档写盘与路径解析 |
+| `src/report-types.ts` | 注入与归档共用的数据形状 |
 | `src/session.ts` | 主会话判定 |
 | `src/tools.ts` | 六个工具的注册与参数校验 |
 | `src/state-types.ts` | 投影状态的数据形状 |
-| `client/index.ts` | 浏览器半端: 工具调用位置的红点气泡 |
+| `client/index.ts` | 浏览器半端: 工具调用位置的红点气泡与耗时自省 Tab |
 | `scripts/build-client.mjs` | 用 esbuild 生成 `lib/client.js` 并套上客户端模块加载器 |
 | `src/types.ts` | 消息来源与投影状态的类型声明合并 |
 
@@ -135,3 +170,4 @@
 - 投影折叠(工具聚合, 反思窗口, 状态迁移, 历史截断)
 - 仅主会话(子代理隐藏)
 - JSON 结构与一行一个 details 对象
+- 归档字段, 注入记录状态与 profile 写盘

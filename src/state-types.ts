@@ -1,5 +1,7 @@
 /* 投影状态的数据形状, 必须保持为纯 JSON. */
 
+import type { InjectionJson, InjectionRecord } from './report-types.js'
+
 /** 插件生命周期状态. */
 export type PluginState = 'active' | 'dormant'
 
@@ -45,4 +47,8 @@ export interface IntrospectState {
   state: PluginState
   wakenPending: boolean
   wakenReason: string | null
+  /** 每轮耗时报告归档, 只用于用户展示. */
+  archive: InjectionJson[]
+  /** 每次注入与注入后反思状态的用户侧记录. */
+  injections: InjectionRecord[]
 }

@@ -193,6 +193,91 @@ describe('休眠与重启', () => {
   })
 })
 
+describe('归档与注入记录', () => {
+  test('每轮归档, 无预估字段为 null', () => {
+    const withEstimate = apply([
+      start(1_000),
+      toolCall(1, 'e', ESTIMATE_TOOL, { estimateMs: 30_000 }, 1_100),
+      toolResult(1, 'e', 1_200),
+      toolCall(1, 'b', 'bash', {}, 1_300),
+      toolResult(1, 'b', 31_300),
+      end(1, 52_000),
+    ])
+    expect(withEstimate.archive).toHaveLength(1)
+    const first = withEstimate.archive[0]
+    expect(first?.type).toBe('time_introspect')
+    expect(first?.estimate_ms).toBe(30_000)
+    expect(first?.overrun_ms).toBe(21_000)
+    expect(first?.time_consume_total_ms).toBe(51_000)
+
+    const withoutEstimate = apply([
+      start(1_000),
+      toolCall(1, 'b', 'bash', {}, 1_300),
+      toolResult(1, 'b', 31_300),
+      end(1, 52_000),
+    ])
+    const second = withoutEstimate.archive[0]
+    expect(second?.estimate_ms).toBeNull()
+    expect(second?.overrun_ms).toBeNull()
+    expect(second?.overrun_ratio).toBeNull()
+  })
+
+  test('注入记录在 start/stop 后标记为已完成', () => {
+    const state = apply([
+      start(1_000),
+      end(1, 52_000),
+      ev('turn/start', { turn: 2 } as unknown as SessionEventMap['turn/start'], 53_000),
+      injection(53_100),
+      toolCall(2, 's', START_TOOL, {}, 53_200),
+      toolResult(2, 's', 53_250),
+      toolCall(2, 'p', STOP_TOOL, {}, 54_000),
+      toolResult(2, 'p', 54_050),
+      end(2, 55_000),
+    ])
+    const record = state.injections[0]
+    expect(record?.turn).toBe(2)
+    expect(record?.aboutTurn).toBe(1)
+    expect(record?.started).toBe(true)
+    expect(record?.completed).toBe(true)
+    expect(record?.outcome).toBe('completed')
+    expect(record?.introspection_ms).toBe(750)
+  })
+
+  test('未开始, 未结束与休眠中断分别记录', () => {
+    const notStarted = apply([
+      ev('turn/start', { turn: 1 } as unknown as SessionEventMap['turn/start'], 1_000),
+      end(1, 52_000),
+      ev('turn/start', { turn: 2 } as unknown as SessionEventMap['turn/start'], 53_000),
+      injection(53_100),
+      end(2, 55_000),
+    ])
+    expect(notStarted.injections[0]?.outcome).toBe('not_started')
+
+    const incomplete = apply([
+      ev('turn/start', { turn: 1 } as unknown as SessionEventMap['turn/start'], 1_000),
+      end(1, 52_000),
+      ev('turn/start', { turn: 2 } as unknown as SessionEventMap['turn/start'], 53_000),
+      injection(53_100),
+      toolCall(2, 's', START_TOOL, {}, 53_200),
+      toolResult(2, 's', 53_250),
+      end(2, 55_000),
+    ])
+    expect(incomplete.injections[0]?.outcome).toBe('incomplete')
+
+    const aborted = apply([
+      ev('turn/start', { turn: 1 } as unknown as SessionEventMap['turn/start'], 1_000),
+      end(1, 52_000),
+      ev('turn/start', { turn: 2 } as unknown as SessionEventMap['turn/start'], 53_000),
+      injection(53_100),
+      toolCall(2, 's', START_TOOL, {}, 53_200),
+      toolResult(2, 's', 53_250),
+      toolCall(2, 'h', SHUT_TOOL, { reason: '够了' }, 54_000),
+      toolResult(2, 'h', 54_010),
+    ])
+    expect(aborted.injections[0]?.outcome).toBe('aborted')
+  })
+})
+
 describe('历史截断', () => {
   test('超过 maxTurnHistory 时丢弃最旧轮次', () => {
     const events: SessionEvent[] = []

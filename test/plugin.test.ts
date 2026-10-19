@@ -15,6 +15,8 @@ function makeFakeContext() {
   const definitions: any[] = []
   const states = new WeakMap<object, Map<string, unknown>>()
   const ctx = {
+    get() { return undefined },
+    logger: { warn() {} },
     on(event: string, listener: any, options?: { prepend?: boolean }) {
       const list = listeners.get(event) ?? []
       if (options?.prepend === true) list.unshift(listener)

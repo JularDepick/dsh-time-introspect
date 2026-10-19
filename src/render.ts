@@ -3,7 +3,10 @@
 import type { Config } from './config.js'
 import { START_TOOL, STOP_TOOL } from './constants.js'
 import type { InjectionPlan, StatusReport } from './policy.js'
-import type { ToolAggregate } from './state-types.js'
+import type { ToolAggregate, TurnRecord } from './state-types.js'
+import type { InjectionJson, ToolEntry } from './report-types.js'
+
+export type { InjectionJson, ToolEntry } from './report-types.js'
 
 /** 紧凑的耗时文本: 毫秒 / 秒 / 分. */
 export function formatMs(ms: number): string {
@@ -38,14 +41,6 @@ export function distributedRatios(values: readonly number[]): number[] {
     rounded[largest] = round4((rounded[largest] ?? 0) + delta)
   }
   return rounded
-}
-
-/** 单条工具耗时项. */
-export interface ToolEntry {
-  name: string
-  calls: number
-  ms: number
-  ratio: number
 }
 
 /** 把工具聚合组装为降序明细, 占比相对本层总量. */
@@ -83,42 +78,30 @@ function capEntries(entries: ToolEntry[], cap: number): ToolEntry[] {
   return scaled
 }
 
-/** 注入 JSON 的完整结构. */
-export interface InjectionJson {
-  type: 'time_introspect'
-  desc: string
-  turn: number
-  waken?: { reason: string }
-  estimate_ms: number
-  overrun_ms: number
-  overrun_ratio: number
-  time_consume_total_ms: number
-  time_consume_details: {
-    tool: { desc: string; ratio: number; total_ms: number; details: ToolEntry[] }
-    model: { desc: string; ratio: number; total_ms: number }
-    introspect: {
-      desc: string
-      ratio: number
-      total_ms: number
-      details: {
-        tool: { desc: string; ratio: number; total_ms: number; details: ToolEntry[] }
-        model: { desc: string; ratio: number; total_ms: number }
-      }
-    }
-  }
+/** 注入与归档共用的报告输入. */
+interface ReportValues {
+  record: TurnRecord
+  actualMs: number
+  estimateMs: number | null
+  overrunMs: number | null
+  overrunRatio: number | null
+  toolTotalMs: number
+  introspectTotalMs: number
+  modelTotalMs: number
+  wakenReason: string | null
 }
 
-/** 组装注入对象; 所有比例在每一层独立归一. */
-export function buildInjection(plan: InjectionPlan, config: Config): InjectionJson {
+/** 组装报告 JSON; 注入与归档共用同一结构. */
+function buildReport(values: ReportValues, config: Config): InjectionJson {
   const copy = categoryDescriptions(config.locale)
-  const actual = plan.actualMs
-  const outerRatios = distributedRatios([plan.toolTotalMs, plan.modelTotalMs, plan.introspectTotalMs])
-  const workEntries = toolEntries(plan.record.toolMs, plan.toolTotalMs)
-  const introspectionDetails = plan.introspectTotalMs > 0
-    ? capEntries(toolEntries(plan.record.introspectionTools), plan.introspectTotalMs)
+  const actual = values.actualMs
+  const outerRatios = distributedRatios([values.toolTotalMs, values.modelTotalMs, values.introspectTotalMs])
+  const workEntries = toolEntries(values.record.toolMs, values.toolTotalMs)
+  const introspectionDetails = values.introspectTotalMs > 0
+    ? capEntries(toolEntries(values.record.introspectionTools), values.introspectTotalMs)
     : []
   const cappedToolTotal = introspectionDetails.reduce((sum, entry) => sum + entry.ms, 0)
-  const introspectionModel = Math.max(0, plan.introspectTotalMs - cappedToolTotal)
+  const introspectionModel = Math.max(0, values.introspectTotalMs - cappedToolTotal)
   const innerRatios = distributedRatios([cappedToolTotal, introspectionModel])
   const detailRatios = distributedRatios(introspectionDetails.map((entry) => entry.ms))
   const details = introspectionDetails.map((entry, index) => ({
@@ -130,28 +113,28 @@ export function buildInjection(plan: InjectionPlan, config: Config): InjectionJs
     desc: config.locale === 'en-US'
       ? `This JSON was generated automatically by dsh-time-introspect and describes the previous turn time distribution. Whether to introspect is your decision; call ${START_TOOL} to begin and ${STOP_TOOL} when done.`
       : `本 JSON 由 dsh-time-introspect 插件自动统计生成, 内容是上一轮任务的耗时分布报告. 是否据此反思由你决定; 如需反思, 调用 ${START_TOOL} 开始, 完成后调用 ${STOP_TOOL}.`,
-    turn: plan.record.turn,
-    ...(plan.wakenReason !== null && plan.wakenReason.length > 0 ? { waken: { reason: plan.wakenReason } } : {}),
-    estimate_ms: plan.estimateMs,
-    overrun_ms: plan.overrunMs,
-    overrun_ratio: round4(plan.overrunRatio),
+    turn: values.record.turn,
+    ...(values.wakenReason !== null && values.wakenReason.length > 0 ? { waken: { reason: values.wakenReason } } : {}),
+    estimate_ms: values.estimateMs,
+    overrun_ms: values.overrunMs,
+    overrun_ratio: values.overrunRatio === null ? null : round4(values.overrunRatio),
     time_consume_total_ms: actual,
     time_consume_details: {
       tool: {
         desc: copy.tool,
         ratio: outerRatios[0] ?? 0,
-        total_ms: plan.toolTotalMs,
+        total_ms: values.toolTotalMs,
         details: workEntries,
       },
       model: {
         desc: copy.model,
         ratio: outerRatios[1] ?? 0,
-        total_ms: plan.modelTotalMs,
+        total_ms: values.modelTotalMs,
       },
       introspect: {
         desc: copy.introspect,
         ratio: outerRatios[2] ?? 0,
-        total_ms: plan.introspectTotalMs,
+        total_ms: values.introspectTotalMs,
         details: {
           tool: {
             desc: copy.introspectTool,
@@ -169,6 +152,56 @@ export function buildInjection(plan: InjectionPlan, config: Config): InjectionJs
     },
   }
   return value
+}
+
+/** 组装一次注入对象; 所有比例在每一层独立归一. */
+export function buildInjection(plan: InjectionPlan, config: Config): InjectionJson {
+  return buildReport({
+    record: plan.record,
+    actualMs: plan.actualMs,
+    estimateMs: plan.estimateMs,
+    overrunMs: plan.overrunMs,
+    overrunRatio: plan.overrunRatio,
+    toolTotalMs: plan.toolTotalMs,
+    introspectTotalMs: plan.introspectTotalMs,
+    modelTotalMs: plan.modelTotalMs,
+    wakenReason: plan.wakenReason,
+  }, config)
+}
+
+/** 组装一轮归档记录; 非触发轮次的缺失总账字段为 null. */
+export function buildArchiveEntry(
+  record: TurnRecord,
+  config: Config,
+  wakenReason: string | null = null,
+): InjectionJson {
+  const actualMs = Math.max(0, (record.endTime ?? record.startTime) - record.startTime)
+  const toolTotalMs = aggregateTotal(record.toolMs)
+  const introspectTotalMs = Math.max(0, record.introspectionMs)
+  const modelTotalMs = Math.max(0, actualMs - toolTotalMs - introspectTotalMs)
+  const estimateMs = record.estimateMs
+  const overrunMs = estimateMs === null ? null : actualMs - estimateMs
+  const overrunRatio = estimateMs === null || estimateMs <= 0 || overrunMs === null
+    ? null
+    : overrunMs / estimateMs
+  return buildReport({
+    record,
+    actualMs,
+    estimateMs,
+    overrunMs,
+    overrunRatio,
+    toolTotalMs,
+    introspectTotalMs,
+    modelTotalMs,
+    wakenReason,
+  }, config)
+}
+
+/** 汇总一组工具聚合的毫秒数. */
+function aggregateTotal(aggregates: Record<string, { ms: number }>): number {
+  let total = 0
+  for (const value of Object.values(aggregates)) total += value.ms
+  return total
 }
 
 /** 注入消息的完整文本; 纯 JSON, details 数组每个对象占一行. */

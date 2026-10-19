@@ -1,7 +1,7 @@
 {
   "name": "dsh-time-introspect",
   "version": "0.1.0",
-  "description": "耗时反思插件: 超时后把完整耗时分布以 JSON 注入下一轮, 模型显式开始与结束反思, 并自行控制插件休眠与重启.",
+  "description": "耗时反思插件: 超时后把完整耗时分布以 JSON 注入下一轮, 每轮同时归档并在会话内 Tab 展示, 模型显式控制反思与休眠.",
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
@@ -31,6 +31,7 @@
     "time",
     "introspection",
     "introspect",
+    "archive",
     "performance"
   ],
   "license": "Apache-2.0",

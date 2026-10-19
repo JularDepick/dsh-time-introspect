@@ -10,7 +10,7 @@ export const SOURCE_KIND = PLUGIN_NAME
 export const PROJECTION_KEY = 'timeIntrospect'
 
 /** 投影状态版本; 折叠语义或字段变化时递增. */
-export const PROJECTION_STATE_VERSION = 3
+export const PROJECTION_STATE_VERSION = 4
 
 /** 工具名统一前缀. */
 export const TOOL_PREFIX = 'time_introspect_'
@@ -45,6 +45,9 @@ export const ALL_TOOLS = [
 
 /** 单条预估允许的最大值(24 小时). */
 export const MAX_ESTIMATE_MS = 24 * 60 * 60 * 1000
+
+/** 归档与注入记录保留的最大轮数. */
+export const MAX_ARCHIVE_TURNS = 200
 
 /** reason 参数的最大长度. */
 export const MAX_REASON_CHARS = 500

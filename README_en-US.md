@@ -24,6 +24,9 @@ Supports dsh 0.2.0-rc.2, 0.2.1-rc.1 and 0.2.1-rc.2
 - Self-billed introspection: all time inside the introspection window counts as introspection cost; tools used inside it are listed under `introspect` so the model can judge whether introspection paid off
 - Model-controlled sleep: `time_introspect_shut` puts the plugin to sleep and `time_introspect_waken` restores it; there is no automatic cooling or dormancy
 - In-transcript red-dot bubbles: every call to this plugin's tools shows a red dot at that call position; a new call expands a one-line hint for 3 seconds, then collapses while the dot stays; click the dot to expand or collapse details
+- Per-turn archive: every completed turn silently produces a record with the same structure as the injection JSON; it never enters model context, and turns that did not trigger an injection carry `null` for `estimate_ms`, `overrun_ms` and `overrun_ratio`
+- In-session tab: a new "Introspection" view lists archived turns and injected-turn outcomes; `details` arrays are collapsed by default and expand on click
+- Profile persistence: each session writes one archive JSON under the profile, keeping the latest 200 turns
 - Status query: `time_introspect_status` returns read-only state, the last turn totals, and the three top-level totals
 - Main session only: subagent sessions receive no injection, and all six tools are hidden there
 - Replayable: state folds from official session events, so a process restart rebuilds it; no custom session event type is written
@@ -117,7 +120,7 @@ Every tool name carries the `time_introspect_` prefix. The plugin blocks no tool
 | `maxTurnHistory` | `12` | Completed turns kept by the projection |
 | `locale` | `zh-CN` | Model-facing text language, `zh-CN` or `en-US` |
 
-The bubble auto-expand duration is fixed at 3 seconds, and the history auto-expand window is fixed at 15 seconds; neither is configurable.
+The bubble auto-expand duration is fixed at 3 seconds, the history auto-expand window is fixed at 15 seconds, and the archive and injection records keep the latest 200 turns; none are configurable.
 
 ## Measurement
 
@@ -135,7 +138,7 @@ The bubble auto-expand duration is fixed at 3 seconds, and the history auto-expa
 | State | Behavior | Enter | Leave |
 |:---:|:---|:---|:---|
 | active | Judge and inject | Initial state, or a model wake | The model calls `time_introspect_shut` |
-| dormant | No injection, no introspection accounting | The model calls `time_introspect_shut` | The model calls `time_introspect_waken` |
+| dormant | No injection; every turn is still archived | The model calls `time_introspect_shut` | The model calls `time_introspect_waken` |
 
 There is no automatic cooling or dormancy. Whether the plugin goes quiet is the model's decision.
 
@@ -148,6 +151,20 @@ There is no automatic cooling or dormancy. Whether the plugin goes quiet is the 
 - Click the dot to expand or collapse details; an expanded bubble stays open until clicked again
 - Details include tool, phase, time, turn, arguments and result; stopping introspection shows the introspection cost, and status queries show the result JSON
 - Text follows the Web UI language
+
+## Archive and introspection tab
+
+- The archive is built on `turn/end`, one record per turn; its structure matches the injection JSON, with `null` for ledger fields that do not exist on non-triggering turns
+- The archive goes only to the session projection and a profile file; it never enters model context and does not affect injection decisions
+- File path: `$DSH_HOME/profiles/<profile>/time-introspect/<sessionId>.json`; its content is `sessionId`, `updatedAt`, an `archive` array and an `injections` array, keeping the latest 200 turns
+- Each injection record stores the injection turn, the summarized turn, estimate, actual, overrun, whether introspection started, whether it completed, and introspection time
+- Introspection outcomes:
+  - Introspected: both `start` and `stop` completed
+  - Incomplete: `start` happened but the turn ended before `stop`
+  - Not started: no `start` after the injection
+  - Aborted: `shut` discarded the introspection window
+  - Pending / In progress: transient states while the turn is still running
+- The tab sits beside the other conversation views; archive cards and injection records are collapsed by default, and expanded records expose the tool `details` arrays; tab data follows the live session projection, and the file is a persistence mirror
 
 ## Relationship to clock plugins
 
@@ -199,9 +216,9 @@ dsh-time-introspect/
 - Defines no "reasonable duration"; it presents distribution and deviation only
 - Never used for scoring, ranking or punishment; timing data exists for feedback and audit
 - Does not modify model weights or train; it is an inference-time context intervention
-- Turns without an estimate trigger nothing
+- Turns without an estimate trigger no injection but are still archived
 - No automatic cooling or dormancy
-- Writes no custom session event types; state folds entirely from official events
+- Writes no custom session event types; state folds from official events, and the profile archive JSON is a persistence mirror only
 - Applies to the main session only
 
 ## License

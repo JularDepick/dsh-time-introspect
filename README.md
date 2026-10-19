@@ -24,6 +24,9 @@
 - 反思自计费: 反思窗口内的全部耗时计入反思开销, 窗口内的工具单独列在 `introspect` 明细里, 帮助模型判断反思本身是否值得
 - 模型控制休眠: `time_introspect_shut` 让插件休眠, `time_introspect_waken` 恢复; 没有自动冷却与自动休眠
 - 对话内红点气泡: 每次模型调用本插件工具, 都在该工具调用位置显示红点; 新调用展开一行简要提示, 3 秒后收起, 红点保留; 点击红点可展开或收起详细信息
+- 逐轮归档: 每一轮结束都静默生成与注入 JSON 同结构的归档记录, 不进入模型上下文; 未触发注入的轮次 `estimate_ms`, `overrun_ms`, `overrun_ratio` 为 `null`
+- 会话内 Tab: 会话区域新增"耗时自省"页, 上半部分逐轮展示归档, 下半部分按注入展示反思结果; `details` 数组默认收起, 点击展开
+- profile 落盘: 每个会话在 profile 下写一个归档 JSON, 最近保留 200 轮
 - 状态可查: `time_introspect_status` 只读返回状态, 最近一轮总账与三类耗时合计
 - 仅主会话: 子代理会话不注入, 六个工具在子代理中完全隐藏
 - 可回放: 状态由会话投影从官方事件折叠, 进程重启自动重建; 不写自定义会话事件
@@ -117,7 +120,7 @@ dsh plugin --profile <name> add dsh-time-introspect
 | `maxTurnHistory` | `12` | 投影保留的已完成轮数上限 |
 | `locale` | `zh-CN` | 模型可见文案语言, 可选 `zh-CN` 或 `en-US` |
 
-气泡自动展开时长固定为 3 秒, 历史调用自动展开窗口固定为 15 秒, 不提供配置.
+气泡自动展开时长固定为 3 秒, 历史调用自动展开窗口固定为 15 秒; 归档与注入记录保留最近 200 轮; 均不提供配置.
 
 ## 口径与判定
 
@@ -135,7 +138,7 @@ dsh plugin --profile <name> add dsh-time-introspect
 | 状态 | 行为 | 迁入 | 迁出 |
 |:---:|:---|:---|:---|
 | active | 正常判定并注入 | 初始状态, 或模型重启 | 模型调用 `time_introspect_shut` |
-| dormant | 不注入, 不累计反思 | 模型调用 `time_introspect_shut` | 模型调用 `time_introspect_waken` |
+| dormant | 不注入; 仍归档每轮耗时 | 模型调用 `time_introspect_shut` | 模型调用 `time_introspect_waken` |
 
 没有自动冷却, 没有自动休眠. 是否让插件安静由模型决定.
 
@@ -148,6 +151,20 @@ dsh plugin --profile <name> add dsh-time-introspect
 - 点击红点展开或收起详细信息; 展开后不会自动收起, 直到再次点击
 - 详情包含工具名, 阶段, 时间, 轮次, 参数与结果; 结束反思会显示本次反思耗时, 状态查询会显示结果 JSON
 - 文案跟随 Web UI 语言
+
+## 归档与自省 Tab
+
+- 归档在 `turn/end` 生成, 每一轮一条; 结构与注入 JSON 相同, 但未触发注入的轮次缺失的总账字段为 `null`
+- 归档只进入会话投影和 profile 文件, 不进入模型上下文, 不影响注入判定
+- 文件路径: `$DSH_HOME/profiles/<profile>/time-introspect/<sessionId>.json`; 内容为 `sessionId`, `updatedAt`, `archive` 数组与 `injections` 数组, 最近 200 轮
+- 注入记录逐条保存注入轮次, 被统计轮次, 预估, 实际, 超出量, 是否开始反思, 是否结束反思与反思耗时
+- 反思状态分为:
+  - 已反思: `start` 与 `stop` 都完成
+  - 反思未完成: 已 `start` 但轮次结束前没有 `stop`
+  - 未反思: 注入后没有 `start`
+  - 已中断: 反思窗口被 `shut` 丢弃
+  - 等待中 / 反思进行中: 当前轮次尚未结束时的临时状态
+- 会话区域的 Tab 与其他视图标签并列; 归档卡片与注入记录默认收起, 展开后可继续展开工具 `details` 数组; Tab 数据随会话投影实时更新, 文件是持久化镜像
 
 ## 与时钟插件的关系
 
@@ -182,7 +199,7 @@ dsh-time-introspect/
 ├── LICENSE               # Apache-2.0 许可证
 ├── README.md             # 中文 README
 ├── README_en-US.md       # 英文 README
-├── client/               # 浏览器半端: 红点气泡
+├── client/               # 浏览器半端: 红点气泡与耗时自省 Tab
 ├── cordis.patch.yml      # 组合包 patch 层
 ├── docs/                 # 项目文档与官方开发文档快照
 ├── package.json          # 包清单
@@ -199,9 +216,9 @@ dsh-time-introspect/
 - 不定义"合理耗时"标准, 只呈现分布与偏差
 - 不用于考核, 排名或惩罚, 耗时数据只为反馈与审计
 - 不修改模型权重, 不训练, 只做推理时的上下文干预
-- 没有预估记录的轮次不触发任何行为
+- 没有预估记录的轮次不触发注入, 但仍进入归档
 - 不自动冷却, 不自动休眠
-- 不写自定义会话事件, 状态完全由官方事件日志折叠得到
+- 不写自定义会话事件, 状态由官方事件日志折叠得到; profile 归档 JSON 只做持久化镜像, 不参与判定
 - 只对主会话生效
 
 ## 许可证

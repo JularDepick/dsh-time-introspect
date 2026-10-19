@@ -43,6 +43,8 @@ export function stateWith(...turns: TurnRecord[]): IntrospectState {
     state: 'active',
     wakenPending: false,
     wakenReason: null,
+    archive: [],
+    injections: [],
   }
 }
 

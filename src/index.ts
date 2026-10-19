@@ -1,7 +1,8 @@
-/* 插件入口: 注册投影与工具, 只对主会话在每轮 step 1 决定是否注入耗时报告. */
+/* 插件入口: 注册投影, 工具与归档写盘, 只对主会话在每轮 step 1 决定是否注入耗时报告. */
 
 import type { Context } from '@deepseek-ai/cordis'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { registerArchiveWriter } from './archive.js'
 import { Config, validateConfig } from './config.js'
 import { ALL_TOOLS, PLUGIN_NAME, PROJECTION_KEY, SOURCE_KIND } from './constants.js'
 import { planInjection } from './policy.js'
@@ -23,6 +24,7 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.sessionProjections.register(createIntrospectProjection(config))
   registerTools(ctx, config)
+  registerArchiveWriter(ctx)
 
   /*
    * 子代理会话完全隐藏插件工具. restrict 只过滤继承层, 因此工具 execute
