@@ -11,4 +11,4 @@
 | `package-lock.json` | 9 | 锁文件 `packages[""]` 版本 |
 | `README.md` | 5 | 版本徽章文本 |
 | `README_en-US.md` | 5 | 版本徽章文本 |
-| `AGENTS.md` | 380 | 项目信息中的当前版本 |
+| `AGENTS.md` | 384 | 项目信息中的当前版本 |

@@ -1,90 +1,116 @@
-/* 模型可见文案的测试. */
+/* JSON 注入与渲染测试. */
 
 import { describe, expect, test } from 'vitest'
-import { planInjection } from '../src/policy.js'
-import type { ReflectionPlan } from '../src/policy.js'
-import { distributionOf, formatMs, formatPercent, renderDormantNotice, renderReflection } from '../src/render.js'
+import { buildInjection, distributedRatios, formatJson, formatMs, renderInjection, renderStatus } from '../src/render.js'
+import { buildStatusReport, planInjection } from '../src/policy.js'
 import { makeConfig, stateWith, turnRecord } from './helpers.js'
 
-const config = makeConfig()
-
-function examplePlan(locale: 'zh-CN' | 'en-US' = 'zh-CN'): ReflectionPlan {
-  const state = stateWith(
-    turnRecord({
-      turn: 1,
-      startTime: 0,
-      endTime: 52_000,
-      estimateMs: 30_000,
-      toolMs: { bash: 22_100, read: 9_400 },
-      reflectionMs: 4_800,
-    }),
-  )
-  const plan = planInjection(state, 2, makeConfig({ locale }))
-  if (plan === null || plan.kind !== 'reflection') throw new Error('expected a reflection plan')
-  return plan
+function plan(overrides = {}) {
+  const state = stateWith(turnRecord({
+    turn: 3,
+    startTime: 1_000,
+    endTime: 53_000,
+    estimateMs: 30_000,
+    toolMs: { bash: { ms: 30_000, calls: 3 } },
+    reflectionMs: 4_800,
+    reflectionTools: { read: { ms: 1_200, calls: 1 } },
+    ...overrides,
+  }))
+  const value = planInjection(state, 4, makeConfig())
+  if (value === null) throw new Error('expected plan')
+  return value
 }
 
-describe('格式化', () => {
-  test('耗时按量级选择单位', () => {
+describe('格式化与占比', () => {
+  test('耗时文本', () => {
     expect(formatMs(500)).toBe('500ms')
-    expect(formatMs(12_200)).toBe('12.2s')
-    expect(formatMs(90_000)).toBe('1m 30s')
-    expect(formatMs(-5)).toBe('0ms')
+    expect(formatMs(1_500)).toBe('1.5s')
+    expect(formatMs(125_000)).toBe('2.1m')
   })
 
-  test('占比四舍五入并保留极小非零值', () => {
-    expect(formatPercent(50, 100)).toBe('50%')
-    expect(formatPercent(1, 300)).toBe('<1%')
-    expect(formatPercent(0, 0)).toBe('0%')
-  })
-})
-
-describe('耗时分布', () => {
-  test('模型自身处理参与降序排序', () => {
-    const entries = distributionOf(examplePlan(), config)
-    expect(entries.map((entry) => entry.label)).toEqual(['bash', '模型自身处理', 'read'])
-    expect(entries[1]?.ms).toBe(15_700)
+  test('每层占比保留 4 位并把差额补给最大项', () => {
+    const ratios = distributedRatios([10_000, 100_000, 20_000])
+    expect(ratios).toEqual([0.0769, 0.7693, 0.1538])
+    expect(ratios.reduce((sum, value) => sum + value, 0)).toBeCloseTo(1, 10)
   })
 
-  test('超出上限的工具合并为其他工具', () => {
-    const entries = distributionOf(examplePlan(), makeConfig({ topTools: 1 }))
-    expect(entries.map((entry) => entry.label)).toContain('其他工具')
-    expect(entries.find((entry) => entry.label === '其他工具')?.ms).toBe(9_400)
+  test('零总量返回全零', () => {
+    expect(distributedRatios([0, 0])).toEqual([0, 0])
   })
 })
 
-describe('反思注入文案', () => {
-  test('包含四类核心信息与首次提示', () => {
-    const text = renderReflection(examplePlan(), config)
-    expect(text).toContain('[耗时反思] 第 1 轮: 预估 30.0s, 实际 52.0s')
-    expect(text).toContain('超出 73%')
-    expect(text).toContain('耗时分布: bash 22.1s (43%) / 模型自身处理 15.7s (30%) / read 9.4s (18%)')
-    expect(text).toContain('模型自身处理: 15.7s (30%)')
-    expect(text).toContain('反思开销: 4.8s, 占该轮总耗时 9%')
-    expect(text).toContain('time_introspect_task_estimate')
+describe('注入 JSON', () => {
+  test('顶层字段与三类明细', () => {
+    const value = buildInjection(plan(), makeConfig())
+    expect(value.type).toBe('time_introspect')
+    expect(value.turn).toBe(3)
+    expect(value.estimate_ms).toBe(30_000)
+    expect(value.overrun_ms).toBe(22_000)
+    expect(value.overrun_ratio).toBe(0.7333)
+    expect(value.time_consume_total_ms).toBe(52_000)
+    expect(value.time_consume_details.tool.total_ms).toBe(30_000)
+    expect(value.time_consume_details.model.total_ms).toBe(17_200)
+    expect(value.time_consume_details.introspect.total_ms).toBe(4_800)
+    expect(value.time_consume_details.introspect.details.tool.total_ms).toBe(1_200)
+    expect(value.time_consume_details.introspect.details.model.total_ms).toBe(3_600)
+    expect(value.time_consume_details.tool.desc).toContain('反思窗口外')
+    expect(value.time_consume_details.model.desc).toContain('不含任何工具耗时')
+    expect(value.time_consume_details.introspect.desc).toContain('反思窗口内')
+    expect(value.time_consume_details.introspect.details.tool.desc).toContain('本插件工具')
+    expect(value.time_consume_details.introspect.details.model.desc).toContain('不含窗口内工具耗时')
+    expect(value.time_consume_details.introspect.details.tool.ratio).toBe(0.25)
+    expect(value.time_consume_details.introspect.details.model.ratio).toBe(0.75)
+    expect(value.waken).toBeUndefined()
   })
 
-  test('重启前缀携带自述原因', () => {
-    const plan = examplePlan()
-    const text = renderReflection({ ...plan, restartReason: '步骤越来越冗杂', firstInjection: false }, config)
-    expect(text.startsWith('本次反思由模型主动重启, 自述原因: 步骤越来越冗杂.')).toBe(true)
-    expect(text).not.toContain('提示: 任务开始时用')
+  test('顶层三桶与每层明细各自归一', () => {
+    const value = buildInjection(plan(), makeConfig())
+    const buckets = [
+      value.time_consume_details.tool.ratio,
+      value.time_consume_details.model.ratio,
+      value.time_consume_details.introspect.ratio,
+    ]
+    expect(buckets.reduce((sum, entry) => sum + entry, 0)).toBeCloseTo(1, 10)
+    const work = value.time_consume_details.tool.details
+    expect(work.reduce((sum, entry) => sum + entry.ratio, 0)).toBeCloseTo(1, 10)
+    const reflection = value.time_consume_details.introspect.details.tool.details
+    expect(reflection.reduce((sum, entry) => sum + entry.ratio, 0)).toBeCloseTo(1, 10)
   })
 
-  test('英文文案可用于非中文会话', () => {
-    const text = renderReflection(examplePlan('en-US'), makeConfig({ locale: 'en-US' }))
-    expect(text).toContain('[time reflection] Turn 1')
-    expect(text).toContain('Time distribution:')
-    expect(text).toContain('Model self-processing:')
-    expect(text).toContain('Reflection cost:')
+  test('英文 locale 输出英文 desc', () => {
+    const value = buildInjection(plan(), makeConfig({ locale: 'en-US' }))
+    expect(value.time_consume_details.tool.desc).toContain('outside the reflection window')
+    expect(value.time_consume_details.introspect.desc).toContain('inside the reflection window')
+  })
+
+  test('重启原因存在时带 waken 对象', () => {
+    const value = buildInjection({ ...plan(), wakenReason: '继续' }, makeConfig())
+    expect(value.waken).toEqual({ reason: '继续' })
+  })
+
+  test('注入文本是合法 JSON, details 每个对象占一行', () => {
+    const text = renderInjection(plan(), makeConfig())
+    const parsed = JSON.parse(text) as Record<string, unknown>
+    expect(parsed.type).toBe('time_introspect')
+    const lines = text.split('\n').filter((line) => line.includes('"name": "bash"'))
+    expect(lines).toHaveLength(1)
+    expect(lines[0]?.trim().startsWith('{ "name": "bash"')).toBe(true)
+    expect(lines[0]?.trim().endsWith('}')).toBe(true)
+  })
+
+  test('formatJson 对简单对象内联', () => {
+    const text = formatJson({ a: { b: 1, c: 'x' }, list: [{ d: 2 }] })
+    expect(text).toContain('{ "b": 1, "c": "x" }')
+    expect(text).toContain('    { "d": 2 }')
+    expect(JSON.parse(text)).toEqual({ a: { b: 1, c: 'x' }, list: [{ d: 2 }] })
   })
 })
 
-describe('休眠通知', () => {
-  test('说明原因与重启通道', () => {
-    const text = renderDormantNotice(config)
-    expect(text).toContain('[耗时反思休眠]')
-    expect(text).toContain('time_introspect_resume_reflection')
-    expect(renderDormantNotice(makeConfig({ locale: 'en-US' }))).toContain('time_introspect_resume_reflection')
+describe('状态结果', () => {
+  test('渲染为 JSON 文本', () => {
+    const report = buildStatusReport(stateWith(turnRecord()))
+    const text = renderStatus(report)
+    expect(JSON.parse(text)).toEqual(report)
+    expect(report.state).toBe('active')
   })
 })

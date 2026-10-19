@@ -1,139 +1,285 @@
-/* 模型可见文案的渲染; 中文为主, 英文为可选语言. */
+/* 模型可见 JSON 注入, 状态结果与工具文案. */
 
 import type { Config } from './config.js'
-import { ESTIMATE_TOOL, REFLECTION_COST_TOOL, RESUME_TOOL } from './constants.js'
-import type { ReflectionPlan } from './policy.js'
-import type { TurnRecord } from './state-types.js'
+import { START_TOOL, STOP_TOOL } from './constants.js'
+import type { InjectionPlan, StatusReport } from './policy.js'
+import type { ToolAggregate } from './state-types.js'
 
-/** 紧凑的耗时文本: 毫秒 / 秒 / 分秒. */
+/** 紧凑的耗时文本: 毫秒 / 秒 / 分. */
 export function formatMs(ms: number): string {
   const value = Math.max(0, ms)
   if (value < 1000) return `${Math.round(value)}ms`
   const seconds = value / 1000
   if (seconds < 60) return `${seconds.toFixed(1)}s`
-  const minutes = Math.floor(seconds / 60)
-  const remainder = Math.round(seconds % 60)
-  return `${minutes}m ${String(remainder).padStart(2, '0')}s`
+  return `${(value / 60000).toFixed(1)}m`
 }
 
-/** 占比文本; 极小的非零占比显示为 <1%. */
-export function formatPercent(part: number, total: number): string {
-  if (total <= 0) return '0%'
-  const percent = (Math.max(0, part) / total) * 100
-  if (percent > 0 && percent < 1) return '<1%'
-  return `${Math.round(percent)}%`
+/** 四舍五入到 4 位小数. */
+export function round4(value: number): number {
+  return Math.round(value * 10000) / 10000
 }
 
-/** 单条耗时分布项. */
-interface DistributionEntry {
-  label: string
+/**
+ * 把一组毫秒值换算为占比, 保留 4 位小数.
+ * 四舍五入导致的缺失差值补给原始占比最大的项, 保证非零总量下和为 1.
+ */
+export function distributedRatios(values: readonly number[]): number[] {
+  if (values.length === 0) return []
+  const total = values.reduce((sum, value) => sum + Math.max(0, value), 0)
+  if (total <= 0) return values.map(() => 0)
+  const raw = values.map((value) => Math.max(0, value) / total)
+  const rounded = raw.map(round4)
+  const delta = round4(1 - rounded.reduce((sum, value) => sum + value, 0))
+  if (delta !== 0) {
+    let largest = 0
+    for (let index = 1; index < raw.length; index += 1) {
+      if ((raw[index] ?? 0) > (raw[largest] ?? 0)) largest = index
+    }
+    rounded[largest] = round4((rounded[largest] ?? 0) + delta)
+  }
+  return rounded
+}
+
+/** 单条工具耗时项. */
+export interface ToolEntry {
+  name: string
+  calls: number
   ms: number
+  ratio: number
 }
 
-/** 组装降序的耗时分布, 模型自身处理作为独立项参与排序. */
-export function distributionOf(plan: ReflectionPlan, config: Config): DistributionEntry[] {
-  const record: TurnRecord = plan.record
-  const entries: DistributionEntry[] = Object.entries(record.toolMs)
-    .map(([label, ms]) => ({ label, ms }))
-    .sort((left, right) => right.ms - left.ms)
-  const head = entries.slice(0, config.topTools)
-  const tail = entries.slice(config.topTools)
-  const others = tail.reduce((total, entry) => total + entry.ms, 0)
-  if (others > 0) head.push({ label: config.locale === 'en-US' ? 'other tools' : '其他工具', ms: others })
-  head.push({ label: config.locale === 'en-US' ? 'model self-processing' : '模型自身处理', ms: plan.modelMs })
-  return head.sort((left, right) => right.ms - left.ms)
+/** 把工具聚合组装为降序明细, 占比相对本层总量. */
+export function toolEntries(
+  aggregates: Record<string, ToolAggregate>,
+  totalOverride?: number,
+): ToolEntry[] {
+  const entries = Object.entries(aggregates)
+    .map(([name, aggregate]) => ({
+      name,
+      calls: Math.max(0, Math.round(aggregate.calls)),
+      ms: Math.max(0, Math.round(aggregate.ms)),
+    }))
+    .filter((entry) => entry.ms > 0 || entry.calls > 0)
+    .sort((left, right) => (right.ms - left.ms) || left.name.localeCompare(right.name))
+  const total = totalOverride === undefined
+    ? entries.reduce((sum, entry) => sum + entry.ms, 0)
+    : Math.max(0, totalOverride)
+  const ratios = distributedRatios(entries.map((entry) => entry.ms))
+  return entries.map((entry, index) => ({ ...entry, ratio: total > 0 ? (ratios[index] ?? 0) : 0 }))
 }
 
-/** 渲染一次耗时反思注入. */
-export function renderReflection(plan: ReflectionPlan, config: Config): string {
-  const zh = config.locale === 'zh-CN'
-  const lines: string[] = []
-  if (plan.restartReason !== null) {
-    const reason = plan.restartReason.trim()
-    if (reason.length > 0) {
-      lines.push(zh ? `本次反思由模型主动重启, 自述原因: ${reason}.` : `This reflection was restarted by the model. Stated reason: ${reason}.`)
-    } else {
-      lines.push(zh ? '本次反思由模型主动重启.' : 'This reflection was restarted by the model.')
+/** 当反思窗口内的工具总时长超过窗口时长时, 按比例压到窗口内, 避免明细自相矛盾. */
+function capEntries(entries: ToolEntry[], cap: number): ToolEntry[] {
+  const total = entries.reduce((sum, entry) => sum + entry.ms, 0)
+  if (total <= 0 || cap <= 0 || total <= cap) return entries
+  const scaled = entries.map((entry) => ({ ...entry, ms: Math.floor((entry.ms * cap) / total) }))
+  let remainder = cap - scaled.reduce((sum, entry) => sum + entry.ms, 0)
+  for (let index = 0; index < scaled.length && remainder > 0; index += 1) {
+    const entry = scaled[index]
+    if (entry === undefined) continue
+    entry.ms += 1
+    remainder -= 1
+  }
+  return scaled
+}
+
+/** 注入 JSON 的完整结构. */
+export interface InjectionJson {
+  type: 'time_introspect'
+  desc: string
+  turn: number
+  waken?: { reason: string }
+  estimate_ms: number
+  overrun_ms: number
+  overrun_ratio: number
+  time_consume_total_ms: number
+  time_consume_details: {
+    tool: { desc: string; ratio: number; total_ms: number; details: ToolEntry[] }
+    model: { desc: string; ratio: number; total_ms: number }
+    introspect: {
+      desc: string
+      ratio: number
+      total_ms: number
+      details: {
+        tool: { desc: string; ratio: number; total_ms: number; details: ToolEntry[] }
+        model: { desc: string; ratio: number; total_ms: number }
+      }
     }
   }
-  lines.push(
-    zh
-      ? `[耗时反思] 第 ${plan.record.turn} 轮: 预估 ${formatMs(plan.estimateMs)}, 实际 ${formatMs(plan.actualMs)}, 超出 ${formatPercent(plan.overrunMs, plan.estimateMs)} (+${formatMs(plan.overrunMs)}).`
-      : `[time reflection] Turn ${plan.record.turn}: estimated ${formatMs(plan.estimateMs)}, actual ${formatMs(plan.actualMs)}, over by ${formatPercent(plan.overrunMs, plan.estimateMs)} (+${formatMs(plan.overrunMs)}).`,
-  )
-  lines.push('')
-  const items = distributionOf(plan, config)
-    .map((entry) => `${entry.label} ${formatMs(entry.ms)} (${formatPercent(entry.ms, plan.actualMs)})`)
-    .join(zh ? ' / ' : ' / ')
-  lines.push(zh ? `耗时分布: ${items}` : `Time distribution: ${items}`)
-  lines.push('')
-  const modelHint = zh
-    ? '若此项偏高, 优先压缩思考链, 而不是调整工具编排.'
-    : 'If this is high, shorten the reasoning chain before changing tool orchestration.'
-  lines.push(
-    zh
-      ? `模型自身处理: ${formatMs(plan.modelMs)} (${formatPercent(plan.modelMs, plan.actualMs)}). ${modelHint}`
-      : `Model self-processing: ${formatMs(plan.modelMs)} (${formatPercent(plan.modelMs, plan.actualMs)}). ${modelHint}`,
-  )
-  lines.push('')
-  lines.push(
-    zh
-      ? `反思开销: ${formatMs(plan.reflectionMs)}, 占该轮总耗时 ${formatPercent(plan.reflectionMs, plan.actualMs)}.`
-      : `Reflection cost: ${formatMs(plan.reflectionMs)}, ${formatPercent(plan.reflectionMs, plan.actualMs)} of the turn.`,
-  )
-  if (plan.firstInjection) {
-    lines.push('')
-    lines.push(
-      zh
-        ? `提示: 任务开始时用 ${ESTIMATE_TOOL} 记录预估; 反思分析结束后调用 ${REFLECTION_COST_TOOL} 标记结束.`
-        : `Tip: record your estimate with ${ESTIMATE_TOOL} at task start, and call ${REFLECTION_COST_TOOL} when the reflection analysis ends.`,
-    )
-  }
-  return lines.join('\n')
 }
 
-/** 渲染休眠通知, 每个休眠周期只出现一次. */
-export function renderDormantNotice(config: Config): string {
-  if (config.locale === 'en-US') {
-    return [
-      '[time reflection dormant] Reflection prompts are paused because reflection overhead stayed high without clear improvement.',
-      `If you later find work getting harder, time repeatedly running long, or steps getting more tangled, call ${RESUME_TOOL} to turn time reflection back on and state your reasoning.`,
-    ].join('\n')
+/** 组装注入对象; 所有比例在每一层独立归一. */
+export function buildInjection(plan: InjectionPlan, config: Config): InjectionJson {
+  const copy = categoryDescriptions(config.locale)
+  const actual = plan.actualMs
+  const outerRatios = distributedRatios([plan.toolTotalMs, plan.modelTotalMs, plan.introspectTotalMs])
+  const workEntries = toolEntries(plan.record.toolMs, plan.toolTotalMs)
+  const reflectionDetails = plan.introspectTotalMs > 0
+    ? capEntries(toolEntries(plan.record.reflectionTools), plan.introspectTotalMs)
+    : []
+  const cappedToolTotal = reflectionDetails.reduce((sum, entry) => sum + entry.ms, 0)
+  const reflectionModel = Math.max(0, plan.introspectTotalMs - cappedToolTotal)
+  const innerRatios = distributedRatios([cappedToolTotal, reflectionModel])
+  const detailRatios = distributedRatios(reflectionDetails.map((entry) => entry.ms))
+  const details = reflectionDetails.map((entry, index) => ({
+    ...entry,
+    ratio: cappedToolTotal > 0 ? (detailRatios[index] ?? 0) : 0,
+  }))
+  const value: InjectionJson = {
+    type: 'time_introspect',
+    desc: config.locale === 'en-US'
+      ? `This JSON was generated automatically by dsh-time-introspect and describes the previous turn time distribution. Whether to reflect is your decision; call ${START_TOOL} to begin and ${STOP_TOOL} when done.`
+      : `本 JSON 由 dsh-time-introspect 插件自动统计生成, 内容是上一轮任务的耗时分布报告. 是否据此反思由你决定; 如需反思, 调用 ${START_TOOL} 开始, 完成后调用 ${STOP_TOOL}.`,
+    turn: plan.record.turn,
+    ...(plan.wakenReason !== null && plan.wakenReason.length > 0 ? { waken: { reason: plan.wakenReason } } : {}),
+    estimate_ms: plan.estimateMs,
+    overrun_ms: plan.overrunMs,
+    overrun_ratio: round4(plan.overrunRatio),
+    time_consume_total_ms: actual,
+    time_consume_details: {
+      tool: {
+        desc: copy.tool,
+        ratio: outerRatios[0] ?? 0,
+        total_ms: plan.toolTotalMs,
+        details: workEntries,
+      },
+      model: {
+        desc: copy.model,
+        ratio: outerRatios[1] ?? 0,
+        total_ms: plan.modelTotalMs,
+      },
+      introspect: {
+        desc: copy.introspect,
+        ratio: outerRatios[2] ?? 0,
+        total_ms: plan.introspectTotalMs,
+        details: {
+          tool: {
+            desc: copy.introspectTool,
+            ratio: innerRatios[0] ?? 0,
+            total_ms: cappedToolTotal,
+            details,
+          },
+          model: {
+            desc: copy.introspectModel,
+            ratio: innerRatios[1] ?? 0,
+            total_ms: reflectionModel,
+          },
+        },
+      },
+    },
   }
-  return [
-    '[耗时反思休眠] 因反思开销连续偏高且未带来明显改善, 反思提示已暂停.',
-    `如果你在后续工作中自己发现耗时反复偏高, 步骤越来越冗杂, 任务推进越来越困难, 可以调用 ${RESUME_TOOL} 重新启用耗时反思, 并说明你的判断依据.`,
-  ].join('\n')
+  return value
 }
 
-/** 工具描述, 随 locale 切换. */
-export function toolDescriptions(locale: Config['locale']) {
+/** 注入消息的完整文本; 纯 JSON, details 数组每个对象占一行. */
+export function renderInjection(plan: InjectionPlan, config: Config): string {
+  return formatJson(buildInjection(plan, config))
+}
+
+/** 状态查询结果的文本. */
+export function renderStatus(report: StatusReport): string {
+  return JSON.stringify(report, null, 2)
+}
+
+/** 把 JSON 值格式化为可读文本; details 数组的每个对象压成一行. */
+export function formatJson(value: unknown, level = 0): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) {
+    if (value.length === 0) return '[]'
+    const padding = '  '.repeat(level + 1)
+    const closing = '  '.repeat(level)
+    const items = value.map((item) => (isSimpleObject(item) ? inlineJson(item) : formatJson(item, level + 1)))
+    return `[\n${items.map((item) => padding + item).join(',\n')}\n${closing}]`
+  }
+  const object = value as Record<string, unknown>
+  if (level > 0 && isSimpleObject(object)) return inlineJson(object)
+  const keys = Object.keys(object)
+  if (keys.length === 0) return '{}'
+  const padding = '  '.repeat(level + 1)
+  const closing = '  '.repeat(level)
+  const items = keys.map((key) => `${padding}${JSON.stringify(key)}: ${formatJson(object[key], level + 1)}`)
+  return `{\n${items.join(',\n')}\n${closing}}`
+}
+
+function isSimpleObject(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  return Object.values(value).every((entry) => typeof entry !== 'object' || entry === null)
+}
+
+function inlineJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map((entry) => inlineJson(entry)).join(', ')}]`
+  const object = value as Record<string, unknown>
+  const entries = Object.entries(object).map(([key, entry]) => `${JSON.stringify(key)}: ${inlineJson(entry)}`)
+  return `{ ${entries.join(', ')} }`
+}
+
+/** 耗时分层对象的范围描述. */
+export interface CategoryDescriptions {
+  tool: string
+  model: string
+  introspect: string
+  introspectTool: string
+  introspectModel: string
+}
+
+/** 按语言返回各耗时层的范围描述. */
+export function categoryDescriptions(locale: Config['locale']): CategoryDescriptions {
   if (locale === 'en-US') {
     return {
-      estimate:
-        'Record the duration you estimate this turn needs, in milliseconds. Call once at task start. When the actual duration clearly exceeds the estimate, the next turn starts with the previous turn time distribution so you can tell whether time went to tools or to your own reasoning. Later calls in the same turn replace earlier ones.',
-      estimateArg: 'Estimated duration in milliseconds (at most 24 hours).',
-      estimateNote: 'Optional note to yourself about the basis of the estimate.',
-      reflection:
-        'Call once after finishing the time reflection analysis to close the reflection phase. The plugin uses this to account for the cost of reflection itself. The optional summary records your conclusion in one line.',
-      reflectionArg: 'One-line conclusion, when you have one.',
-      reflectionWorthIt: 'Whether the reflection looked worth its cost, when you have an opinion.',
-      resume:
-        'Call when time reflection is dormant because its own overhead stayed high, and you find work getting harder or durations repeatedly running long. It re-enables reflection and records your reasoning.',
-      resumeArg: 'Why you want reflection back; it appears at the start of the next reflection prompt.',
+      tool: 'Tool time outside the reflection window. Tool calls made during reflection are excluded. Calls to this plugin\'s own tools, including the start and stop boundary tools, are included.',
+      model: 'Model processing and waiting outside the reflection window. Model time inside reflection and all tool time are excluded.',
+      introspect: 'All time inside the reflection window, including tool calls (this plugin\'s tools included) and model processing. The start and stop tools themselves sit outside the window and are not included.',
+      introspectTool: 'Tool time inside the reflection window, including this plugin\'s tools. The start and stop tools themselves sit outside the window and are not included.',
+      introspectModel: 'Model processing and waiting inside the reflection window, excluding tool time.',
     }
   }
   return {
-    estimate:
-      '记录你为本轮任务预估的耗时 (毫秒). 在任务开始时调用一次. 若实际耗时明显超出预估, 下一轮开始时你会收到上一轮的耗时分布, 用于判断时间花在工具还是自身推理上. 同一轮多次调用以最后一次为准.',
-    estimateArg: '预估耗时 (毫秒, 上限 24 小时).',
-    estimateNote: '可选备注, 仅用于你自己回忆预估依据.',
-    reflection:
-      '耗时反思分析完成后调用一次, 标记反思阶段结束. 插件会据此计算反思本身占用的时间, 并把它计入成本核算. 可选 summary 用一句话概括你的结论.',
-    reflectionArg: '一句话结论 (可选).',
-    reflectionWorthIt: '你认为这次反思是否值得其开销 (可选).',
-    resume:
-      '耗时反思因自身开销过高而休眠后, 如果你发现工作越来越难推进, 耗时反复偏高, 调用本工具重新启用反思. reason 必填: 写下你的判断依据.',
-    resumeArg: '你希望重新启用反思的判断依据; 它会出现在下一次反思提示的开头.',
+    tool: '本层是反思窗口外的工具耗时, 不含反思窗口内调用的工具; 含反思窗口外的本插件工具(包括开始与结束边界工具)的调用耗时.',
+    model: '本层是反思窗口外的模型自身处理与等待耗时, 不含反思窗口内的模型耗时, 也不含任何工具耗时.',
+    introspect: '本层是反思窗口内的全部耗时, 含窗口内调用的工具(包括本插件工具)与模型处理; 开始与结束工具本身在窗口外, 不计入本层.',
+    introspectTool: '本层是反思窗口内调用的工具耗时, 含窗口内调用的本插件工具; 开始与结束工具本身在窗口外, 不计入本层.',
+    introspectModel: '本层是反思窗口内的模型处理与等待耗时, 不含窗口内工具耗时.',
+  }
+}
+
+/** 工具描述. */
+export interface ToolDescriptions {
+  estimate: string
+  estimateArg: string
+  start: string
+  stop: string
+  shut: string
+  shutArg: string
+  waken: string
+  wakenArg: string
+  status: string
+}
+
+/** 按语言返回工具描述. */
+export function toolDescriptions(locale: Config['locale']): ToolDescriptions {
+  if (locale === 'en-US') {
+    return {
+      estimate: 'Record the estimated duration of this turn in milliseconds. Only turns with an estimate can receive a time distribution after an overrun. The last call in a turn wins.',
+      estimateArg: 'Estimated duration of this turn in milliseconds.',
+      start: 'Start reflection timing. An injection must have arrived in this turn, and a turn allows one reflection. While dormant, call waken first. Tools called while the window is open are grouped under the reflection breakdown.',
+      stop: 'Stop reflection timing. Fails when no reflection window is open. The next injection reports the reflection cost.',
+      shut: 'Put the plugin to sleep. No injection happens until waken is called. Sleeping discards an open reflection window.',
+      shutArg: 'Why the plugin should sleep. Shown to the user and carried in the next injection.',
+      waken: 'Wake the plugin. The first injection after a wake carries your reason. Idempotent when already active.',
+      wakenArg: 'Why the plugin should wake. Shown to the user and carried in the next injection.',
+      status: 'Read-only status: current state, the last completed turn totals, and the three top-level totals.',
+    }
+  }
+  return {
+    estimate: '登记本轮预估耗时(毫秒). 只有登记过预估的轮次, 超时后才会收到耗时报告; 同一轮多次调用以最后一次为准.',
+    estimateArg: '本轮预估耗时, 单位毫秒.',
+    start: '开始反思计时. 本轮必须先收到耗时报告注入, 且同一轮只能开始一次. 休眠时不能开始, 需先调用 time_introspect_waken. 反思窗口内调用的工具会计入反思明细.',
+    stop: '结束反思计时. 没有打开的反思窗口时调用会报错. 下一次注入会统计本次反思开销.',
+    shut: '让插件休眠. 休眠后不再注入耗时报告, 直到调用 waken. 休眠会丢弃未结束的反思窗口.',
+    shutArg: '休眠原因. 会展示给用户, 并随下一次注入携带.',
+    waken: '重启插件. 重启后的第一次注入会带上你给出的原因. 已活动时调用是幂等的.',
+    wakenArg: '重启原因. 会展示给用户, 并随下一次注入携带.',
+    status: '只读查询插件状态, 最近一轮总账与三类耗时合计.',
   }
 }

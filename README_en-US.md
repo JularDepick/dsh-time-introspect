@@ -10,7 +10,7 @@
 
 </div>
 
-A time-reflection plugin for dsh: when a turn overruns, the next turn starts with the previous turn time distribution, so the model can locate where time went and adjust by itself. When reflection overhead keeps eating the turn, the plugin goes dormant and the model can wake it at any time
+A time-reflection plugin for dsh: when the previous turn exceeded the model's estimate, a complete time distribution is injected as JSON in the next turn, and the model decides whether to reflect. Reflection starts and stops through explicit tool calls, and the plugin only measures and accounts; it never auto-cools or auto-sleeps. Whether to go quiet is the model's decision.
 
 Supports dsh 0.2.0-rc.2, 0.2.1-rc.1 and 0.2.1-rc.2
 
@@ -18,30 +18,64 @@ Supports dsh 0.2.0-rc.2, 0.2.1-rc.1 and 0.2.1-rc.2
 
 ## Features
 
-- Overrun-triggered: feedback is injected once at step 1 of the next turn only when the previous turn exceeded its estimate by both a ratio (`minOverrunRatio`, default 20%) and an absolute floor (`minOverrunMs`, default 5000 ms). Non-overrun turns produce no timing injection
-- Time distribution: tool durations are aggregated by tool name in descending order, and tools beyond `topTools` fold into "other tools". "Model self-processing" is an independent entry in the same ordering
-- Actionable split: "model self-processing" is actual - tool time - reflection cost. The separate line tells whether time went to tool orchestration or to the model own reasoning
-- Self-billing reflection: observable time from injection to the end of the reflection phase is counted as "reflection cost" and delivered with the next feedback, so the model can judge whether reflection still pays off
-- Self-constraint: consecutive turns with high reflection ratio and no improvement enter cooling; accumulating cooling cycles leads to dormancy. Dormancy injects one notice and then stays quiet
-- Model-controlled restart: `time_introspect_resume_reflection` stays registered. The model can re-enable reflection at any time with a stated reason. The first turns after a restart use a stricter cooling threshold, preventing a restart-then-sleep loop
-- Replayable: all state folds from the official session event log and is rebuilt after a process restart. No custom session event type is written
-- Bilingual model-facing text: Chinese (`zh-CN`, default) or English (`en-US`)
+- Overrun-triggered: injection happens once at step 1 of the next turn only when the previous turn has an estimate and its actual duration exceeds both a ratio (`minOverrunRatio`, default 20%) and an absolute floor (`minOverrunMs`, default 5000 ms)
+- Complete JSON: the injection is structured JSON with totals, per-tool time, model self-processing, and reflection internals; every tool is listed individually, with no top-N folding
+- Explicit reflection boundaries: the model calls `time_introspect_start` and `time_introspect_stop`; the plugin measures between those positions, so the model never compiles or reports timing data
+- Self-billed reflection: all time inside the reflection window counts as reflection cost; tools used inside it are listed under `introspect` so the model can judge whether reflection paid off
+- Model-controlled sleep: `time_introspect_shut` puts the plugin to sleep and `time_introspect_waken` restores it; there is no automatic cooling or dormancy
+- Status query: `time_introspect_status` returns read-only state, the last turn totals, and the three top-level totals
+- Main session only: subagent sessions receive no injection, and all six tools are hidden there
+- Replayable: state folds from official session events, so a process restart rebuilds it; no custom session event type is written
+- Bilingual text: `locale` selects Chinese (`zh-CN`, default) or English (`en-US`)
 
 ## What the model sees
 
-Previous turn estimated 30s and took 52s; step 1 of the next turn receives:
-
-```text
-[time reflection] Turn 3: estimated 30.0s, actual 52.0s, over by 73% (+22.0s).
-
-Time distribution: bash 22.1s (43%) / model self-processing 13.4s (26%) / read 9.4s (18%) / other tools 2.3s (4%)
-
-Model self-processing: 13.4s (26%). If this is high, shorten the reasoning chain before changing tool orchestration.
-
-Reflection cost: 4.8s, 9% of the turn.
+```json
+{
+  "type": "time_introspect",
+  "desc": "This JSON was generated automatically by the dsh-time-introspect plugin and describes the previous turn time distribution. Whether to reflect is your decision; call time_introspect_start to begin and time_introspect_stop when done.",
+  "turn": 3,
+  "waken": { "reason": "three turns of redundant tool calls; work is getting harder" },
+  "estimate_ms": 100000,
+  "overrun_ms": 30000,
+  "overrun_ratio": 0.3,
+  "time_consume_total_ms": 130000,
+  "time_consume_details": {
+    "tool": {
+      "desc": "Tool time outside the reflection window. Tool calls made during reflection are excluded. Calls to this plugin's own tools outside the window, including the start and stop boundary tools, are included.",
+      "ratio": 0.0769,
+      "total_ms": 10000,
+      "details": [
+        { "name": "bash", "calls": 3, "ms": 4000, "ratio": 0.4 },
+        { "name": "read", "calls": 2, "ms": 2000, "ratio": 0.2 },
+        { "name": "write", "calls": 4, "ms": 3000, "ratio": 0.3 },
+        { "name": "time_introspect_start", "calls": 1, "ms": 300, "ratio": 0.03 },
+        { "name": "time_introspect_stop", "calls": 1, "ms": 700, "ratio": 0.07 }
+      ]
+    },
+    "model": { "desc": "Model processing and waiting outside the reflection window. Model time inside reflection and all tool time are excluded.", "ratio": 0.7693, "total_ms": 100000 },
+    "introspect": {
+      "desc": "All time inside the reflection window, including tool calls (this plugin's tools included) and model processing. The start and stop tools themselves sit outside the window and are not included.",
+      "ratio": 0.1538,
+      "total_ms": 20000,
+      "details": {
+        "tool": {
+          "desc": "Tool time inside the reflection window, including this plugin's tools called inside it. The start and stop tools themselves sit outside the window and are not included.",
+          "ratio": 0.3,
+          "total_ms": 6000,
+          "details": [
+            { "name": "bash", "calls": 10, "ms": 5000, "ratio": 0.8333 },
+            { "name": "read", "calls": 2, "ms": 1000, "ratio": 0.1667 }
+          ]
+        },
+        "model": { "desc": "Model processing and waiting inside the reflection window, excluding tool time.", "ratio": 0.7, "total_ms": 14000 }
+      }
+    }
+  }
+}
 ```
 
-The first injection also carries one hint line about `time_introspect_task_estimate` and `time_introspect_report_reflection_cost`. When the model restarted reflection itself, the injection opens with the stated reason.
+`waken` appears only in the first injection after a model restart. Every time layer carries a `desc` explaining whether it contains reflection tools and this plugin's tools. Each layer keeps four decimal places, with the rounding remainder assigned to its largest entry.
 
 ## Install
 
@@ -51,71 +85,58 @@ dsh plugin --profile <name> add dsh-time-introspect
 
 `<name>` is the target profile, for example `web`, `desktop` or a dedicated profile.
 
-The plugin works with its defaults. It never broadcasts timing readings; only turns where the model registered an estimate with `time_introspect_task_estimate` are compared.
-
 ## Tools
 
-Every tool name carries the `time_introspect_` prefix to avoid collisions with other plugins.
-
-| Tool | Purpose | Parameters |
+| Tool | Parameters | Behavior |
 |:---:|:---|:---|
-| `time_introspect_task_estimate` | Register this turn estimated duration in milliseconds. Call at task start; later calls in the same turn replace earlier ones | `estimateMs` required, at most 24 hours; `note` optional |
-| `time_introspect_report_reflection_cost` | Close the reflection analysis and its timing | `summary` optional, `worthIt` optional |
-| `time_introspect_resume_reflection` | Re-enable reflection after dormancy. Usable at any time; the reason is recorded, not judged | `reason` required, at most 500 characters |
+| `time_introspect_estimate` | `estimateMs` | Record this turn estimate; the last call wins |
+| `time_introspect_start` | none | Start reflection; requires an injection in this turn, and fails if a window is already open |
+| `time_introspect_stop` | none | Stop reflection; fails when no window is open |
+| `time_introspect_shut` | `reason` | Sleep; idempotent when already dormant, discards an open window |
+| `time_introspect_waken` | `reason` | Wake; idempotent when already active |
+| `time_introspect_status` | none | Read-only state and last-turn totals |
 
-All three are advisory channels. The plugin blocks no tool call and never checks whether a reflection actually happened.
+Every tool name carries the `time_introspect_` prefix. The plugin blocks no tool call and never checks whether reflection was actually completed.
 
 ## Configuration
-
-Override defaults in the profile `cordis.patch.yml` or the plugin row:
 
 ```yaml
 - name: dsh-time-introspect
   config:
     minOverrunRatio: 0.15
     minOverrunMs: 3000
-    topTools: 6
     locale: en-US
 ```
 
 | Field | Default | Meaning |
 |:---:|:---:|:---|
-| `enabled` | `true` | Master switch. When off, no projection, tools or listener are registered |
+| `enabled` | `true` | Master switch; when off, no projection, tools or listener are registered |
 | `minOverrunRatio` | `0.20` | Minimum overrun ratio required for injection |
 | `minOverrunMs` | `5000` | Minimum absolute overrun in milliseconds required for injection |
-| `coolRatio` | `0.15` | Reflection-to-turn ratio that counts as high cost |
-| `coolRatioAfterResume` | `0.10` | Stricter ratio used for the first turns after a model restart |
-| `conservativeTurns` | `2` | Turns the stricter ratio lasts after a restart |
-| `coolAfterHighTurns` | `2` | Consecutive high-ratio, no-improvement turns before cooling |
-| `minImprovementRatio` | `0.10` | Relative drop against the baseline required to count as improvement |
-| `baselineTurns` | `3` | Completed turns used to compute the improvement baseline |
-| `coolTurns` | `3` | Turns in the first cooling cycle; each later cycle doubles |
-| `dormancyAfterCooldowns` | `2` | Accumulated cooling cycles that lead to dormancy |
-| `topTools` | `5` | Tools listed individually in the distribution |
 | `maxTurnHistory` | `12` | Completed turns kept by the projection |
 | `locale` | `zh-CN` | Model-facing text language, `zh-CN` or `en-US` |
-| `reflectionTools` | `[]` | Extra tool names treated as reflection tools; their time never enters the normal tool buckets |
 
-Invalid configuration fails at plugin load instead of silently falling back to defaults.
+Bubble-related configuration will be added once the bubble design is final.
 
 ## Measurement
 
-- Previous turn: the latest closed turn before the current one. No previous turn, or no `time_introspect_task_estimate` in it, means no injection
 - Actual duration: `turn/end` event time minus `turn/start` event time
-- Tool duration: `tool/call` and `tool/result` paired by `callId`, which covers approval waits and session queueing
-- Reflection cost: from the injection entering the log to the end of the reflection phase. The end is the `time_introspect_report_reflection_cost` result or the start of the first ordinary tool call after the injection, whichever comes first. A window still open when the turn ends is not counted
-- Model self-processing: `actual - tool time - reflection cost`, floored at zero
-- Zero-duration turns produced by crash recovery (which reuses the last event time) are ignored by both injection and self-constraint
+- Tool duration: `tool/call` and `tool/result` paired by `callId`
+- Reflection window: from the `time_introspect_start` result to the `time_introspect_stop` call
+- All time inside the reflection window counts as reflection cost; ordinary and plugin tools inside it appear under `introspect.details.tool` and not in the top-level `tool.details`
+- This plugin's own tools appear in `tool.details` like any other tool; there is no separate plugin overhead line
+- Top-level relation: `time_consume_total_ms = tool.total_ms + model.total_ms + introspect.total_ms`
+- Each layer `ratio` is relative to its parent total, four decimals, with the rounding remainder assigned to the largest entry
+- Zero-duration turns produced by crash recovery are ignored by the injection decision
 
-Self-constraint transitions:
+## States
 
 | State | Behavior | Enter | Leave |
 |:---:|:---|:---|:---|
-| active | Judge and inject | Initial state, or cooling finished | `coolAfterHighTurns` consecutive high-ratio, no-improvement turns |
-| cooling | No injection | Cooling triggered | After `coolTurns` turns (each cycle doubles, capped at 8x) |
-| dormant | No injection, no reflection accounting, one notice | Accumulated cooling cycles reach `dormancyAfterCooldowns` | The model calls `time_introspect_resume_reflection` |
+| active | Judge and inject | Initial state, or a model wake | The model calls `time_introspect_shut` |
+| dormant | No injection, no reflection accounting | The model calls `time_introspect_shut` | The model calls `time_introspect_waken` |
 
-After a restart, `conservativeTurns` turns use `coolRatioAfterResume`; cooling counters reset while ordinary tool records stay available for before/after comparison.
+There is no automatic cooling or dormancy. Whether the plugin goes quiet is the model's decision.
 
 ## Relationship to clock plugins
 
@@ -127,7 +148,7 @@ This plugin does not replace `dsh-time-context` or `dsh-time-reminder`. Those ma
 |:---:|:---|
 | dsh | `0.2.0-rc.2`, `0.2.1-rc.1`, `0.2.1-rc.2` |
 | Node.js | `^22.19.0` or `>=24.0.0` |
-| Enforcement | `engines.dsh` and every `@deepseek-ai/dsh*` peer declare the same supported set. From 0.2.1-rc.1 on, `engines.dsh` takes precedence when present; earlier versions check the peer ranges |
+| Enforcement | `engines.dsh` and every `@deepseek-ai/dsh*` peer declare the same supported set. From 0.2.1-rc.1 on, `engines.dsh` takes precedence when present |
 
 ## Development
 
@@ -139,7 +160,7 @@ npm run build
 npm run pack
 ```
 
-Build output lives in `lib/` with `lib/index.js` as the entry. For local debugging, run `npm run build` first and point `--patch` at `lib/index.js`. `npm run pack` writes the tgz artifact into `release/`. Mechanism details live in [docs/mechanism.md](./docs/mechanism.md).
+Build output lives in `lib/` with `lib/index.js` as the entry. `npm run pack` writes the tgz artifact into `release/`. Mechanism details live in [docs/mechanism.md](./docs/mechanism.md).
 
 Directory layout:
 
@@ -167,7 +188,9 @@ dsh-time-introspect/
 - Never used for scoring, ranking or punishment; timing data exists for feedback and audit
 - Does not modify model weights or train; it is an inference-time context intervention
 - Turns without an estimate trigger nothing
+- No automatic cooling or dormancy
 - Writes no custom session event types; state folds entirely from official events
+- Applies to the main session only
 
 ## License
 

@@ -1,141 +1,103 @@
-/* 注入判定与自约束状态机的单元测试. */
+/* 注入判定与状态报告测试. */
 
 import { describe, expect, test } from 'vitest'
-import { hasImprovement, planInjection, settleTurn } from '../src/policy.js'
-import type { IntrospectState } from '../src/state-types.js'
+import { aggregateCalls, aggregateTotal, buildStatusReport, planInjection } from '../src/policy.js'
 import { makeConfig, stateWith, turnRecord } from './helpers.js'
 
-const config = makeConfig()
-
 describe('planInjection', () => {
-  test('没有预估时不注入', () => {
-    const state = stateWith(turnRecord({ estimateMs: null }))
-    expect(planInjection(state, 2, config)).toBeNull()
-  })
-
-  test('低于绝对或相对阈值时不注入', () => {
-    const small = stateWith(turnRecord({ startTime: 0, endTime: 33_000, estimateMs: 30_000 }))
-    expect(planInjection(small, 2, config)).toBeNull()
-    const tiny = stateWith(turnRecord({ startTime: 0, endTime: 66_000, estimateMs: 60_000 }))
-    expect(planInjection(tiny, 2, config)).toBeNull()
-  })
-
-  test('超过阈值时给出完整计划', () => {
-    const state = stateWith(
-      turnRecord({
-        turn: 1,
-        startTime: 0,
-        endTime: 52_000,
-        estimateMs: 30_000,
-        toolMs: { bash: 22_100, read: 9_400 },
-        reflectionMs: 4_800,
-      }),
-    )
-    const plan = planInjection(state, 2, config)
+  test('上一轮超时后返回完整计划', () => {
+    const state = stateWith(turnRecord({
+      turn: 3,
+      startTime: 1_000,
+      endTime: 53_000,
+      estimateMs: 30_000,
+      toolMs: { bash: { ms: 30_000, calls: 3 } },
+      reflectionMs: 4_800,
+      reflectionTools: { read: { ms: 1_200, calls: 1 } },
+    }))
+    const plan = planInjection(state, 4, makeConfig())
     expect(plan).not.toBeNull()
-    if (plan === null || plan.kind !== 'reflection') throw new Error('expected reflection plan')
-    expect(plan.actualMs).toBe(52_000)
-    expect(plan.overrunMs).toBe(22_000)
-    expect(plan.toolTotalMs).toBe(31_500)
-    expect(plan.modelMs).toBe(52_000 - 31_500 - 4_800)
-    expect(plan.reflectionRatio).toBeCloseTo(4_800 / 52_000)
-    expect(plan.firstInjection).toBe(true)
+    expect(plan?.actualMs).toBe(52_000)
+    expect(plan?.overrunMs).toBe(22_000)
+    expect(plan?.overrunRatio).toBeCloseTo(22_000 / 30_000)
+    expect(plan?.toolTotalMs).toBe(30_000)
+    expect(plan?.introspectTotalMs).toBe(4_800)
+    expect(plan?.modelTotalMs).toBe(17_200)
   })
 
-  test('冷却中不注入, 休眠时只给一次通知', () => {
-    const cooling = { ...stateWith(turnRecord()), status: 'cooling' as const, coolingRemaining: 2 }
-    expect(planInjection(cooling, 2, config)).toBeNull()
-    const dormant = { ...stateWith(turnRecord()), status: 'dormant' as const, noticePending: true }
-    expect(planInjection(dormant, 2, config)?.kind).toBe('notice')
-    const quiet = { ...dormant, noticePending: false }
-    expect(planInjection(quiet, 2, config)).toBeNull()
+  test('dormant 不注入', () => {
+    const state = { ...stateWith(turnRecord()), state: 'dormant' as const }
+    expect(planInjection(state, 2, makeConfig())).toBeNull()
   })
 
-  test('零时长的恢复轮次不触发注入', () => {
-    const record = turnRecord({ startTime: 1_000, endTime: 1_000, estimateMs: 30_000 })
-    expect(planInjection(stateWith(record), 2, config)).toBeNull()
+  test('没有上一轮或没有预估时不注入', () => {
+    expect(planInjection(stateWith(), 2, makeConfig())).toBeNull()
+    expect(planInjection(stateWith(turnRecord({ estimateMs: null })), 2, makeConfig())).toBeNull()
   })
 
-  test('只有 step 1 之前的最近一轮会被比较', () => {
-    const state = stateWith(
-      turnRecord({ turn: 1, startTime: 0, endTime: 60_000, estimateMs: 60_000 }),
-      turnRecord({ turn: 2, startTime: 60_000, endTime: 120_000, estimateMs: 30_000 }),
-    )
-    const plan = planInjection(state, 3, config)
-    expect(plan).not.toBeNull()
-    if (plan === null || plan.kind !== 'reflection') throw new Error('expected reflection plan')
-    expect(plan.record.turn).toBe(2)
-  })
-})
-
-describe('settleTurn', () => {
-  test('连续两轮反思占比过高且无改善时进入冷却', () => {
-    const first = turnRecord({ turn: 1, startTime: 0, endTime: 50_000, reflectionMs: 9_000 })
-    const afterFirst = settleTurn(stateWith(first), first, config)
-    expect(afterFirst.status).toBe('active')
-    expect(afterFirst.highStreak).toBe(1)
-
-    const second = turnRecord({ turn: 2, startTime: 50_000, endTime: 100_000, reflectionMs: 9_000 })
-    const afterSecond = settleTurn({ ...stateWith(first, second), highStreak: afterFirst.highStreak }, second, config)
-    expect(afterSecond.status).toBe('cooling')
-    expect(afterSecond.coolingRemaining).toBe(config.coolTurns)
-    expect(afterSecond.cooldownCount).toBe(1)
+  test('低于绝对或比例阈值时不注入', () => {
+    const lowAbsolute = stateWith(turnRecord({ startTime: 0, endTime: 34_000, estimateMs: 30_000 }))
+    expect(planInjection(lowAbsolute, 2, makeConfig())).toBeNull()
+    const lowRatio = stateWith(turnRecord({ startTime: 0, endTime: 40_000, estimateMs: 30_000 }))
+    expect(planInjection(lowRatio, 2, makeConfig({ minOverrunRatio: 0.5 }))).toBeNull()
   })
 
-  test('冷却按轮倒计时后回到 active', () => {
-    let state: IntrospectState = { ...stateWith(), status: 'cooling', coolingRemaining: 3, cooldownCount: 1 }
-    state = settleTurn(state, turnRecord({ turn: 3, reflectionMs: 0 }), config)
-    expect(state.coolingRemaining).toBe(2)
-    state = settleTurn(state, turnRecord({ turn: 4, reflectionMs: 0 }), config)
-    state = settleTurn(state, turnRecord({ turn: 5, reflectionMs: 0 }), config)
-    expect(state.status).toBe('active')
-    expect(state.coolingRemaining).toBe(0)
-  })
-
-  test('冷却次数达到上限后进入休眠并留下一次性通知', () => {
+  test('重启原因随计划返回', () => {
     const state = {
-      ...stateWith(turnRecord({ turn: 1, reflectionMs: 9_000 })),
-      status: 'active' as const,
-      cooldownCount: 2,
-      highStreak: 1,
+      ...stateWith(turnRecord()),
+      wakenPending: true,
+      wakenReason: '工具调用冗余',
     }
-    const next = settleTurn(state, turnRecord({ turn: 2, startTime: 50_000, endTime: 100_000, reflectionMs: 9_000 }), config)
-    expect(next.status).toBe('dormant')
-    expect(next.noticePending).toBe(true)
+    expect(planInjection(state, 2, makeConfig())?.wakenReason).toBe('工具调用冗余')
   })
 
-  test('重启后使用更保守的冷却阈值', () => {
-    const first = turnRecord({ turn: 1, startTime: 0, endTime: 50_000, reflectionMs: 6_000 })
-    const second = turnRecord({ turn: 2, startTime: 50_000, endTime: 100_000, reflectionMs: 6_000 })
-    /* 12% 低于常规阈值 15%, 但高于重启后的 10%, 因此连续两轮仍会触发冷却. */
-    const state = { ...stateWith(first, second), conservativeRemaining: 1, highStreak: 1 }
-    const next = settleTurn(state, turnRecord({ turn: 3, startTime: 100_000, endTime: 150_000, reflectionMs: 6_000 }), config)
-    expect(next.status).toBe('cooling')
-  })
-
-  test('零时长轮次不改变自约束状态', () => {
-    const record = turnRecord({ startTime: 1_000, endTime: 1_000, reflectionMs: 5_000 })
-    const state = stateWith()
-    expect(settleTurn(state, record, config)).toBe(state)
-  })
-
-  test('耗时明显下降视为改善并清空连续计数', () => {
-    const baseline = turnRecord({ turn: 1, startTime: 0, endTime: 60_000, reflectionMs: 9_000 })
-    const state = { ...stateWith(baseline), highStreak: 1 }
-    const improved = turnRecord({ turn: 2, startTime: 60_000, endTime: 100_000, reflectionMs: 9_000 })
-    const next = settleTurn(state, improved, config)
-    expect(next.highStreak).toBe(0)
-    expect(next.status).toBe('active')
+  test('只取当前轮之前的最近闭合轮次', () => {
+    const state = stateWith(
+      turnRecord({ turn: 1, startTime: 0, endTime: 10_000, estimateMs: 1_000 }),
+      turnRecord({ turn: 3, startTime: 2_000, endTime: 52_000, estimateMs: 30_000 }),
+      turnRecord({ turn: 4, startTime: 60_000, endTime: null, estimateMs: null }),
+    )
+    expect(planInjection(state, 5, makeConfig())?.record.turn).toBe(3)
   })
 })
 
-describe('hasImprovement', () => {
-  test('相对中位数下降超过阈值才算改善', () => {
-    const baseline = turnRecord({ turn: 1, startTime: 0, endTime: 100_000 })
-    const state = stateWith(baseline)
-    const record = turnRecord({ turn: 2, startTime: 100_000, endTime: 189_000 })
-    expect(hasImprovement(state, record, config)).toBe(true)
-    const slower = turnRecord({ turn: 2, startTime: 100_000, endTime: 191_000 })
-    expect(hasImprovement(state, slower, config)).toBe(false)
+describe('聚合与状态报告', () => {
+  test('汇总工具耗时与调用次数', () => {
+    const aggregates = { bash: { ms: 1_000, calls: 2 }, read: { ms: 500, calls: 1 } }
+    expect(aggregateTotal(aggregates)).toBe(1_500)
+    expect(aggregateCalls(aggregates)).toBe(3)
+  })
+
+  test('状态报告返回最近一轮总账与三类合计', () => {
+    const state = stateWith(turnRecord({
+      turn: 3,
+      startTime: 1_000,
+      endTime: 53_000,
+      estimateMs: 30_000,
+      toolMs: { bash: { ms: 30_000, calls: 3 } },
+      reflectionMs: 4_800,
+    }))
+    const report = buildStatusReport(state)
+    expect(report.state).toBe('active')
+    expect(report.last_turn?.turn).toBe(3)
+    expect(report.last_turn?.actual_ms).toBe(52_000)
+    expect(report.last_turn?.overrun_ms).toBe(22_000)
+    expect(report.last_turn?.overrun_ratio).toBe(0.7333)
+    expect(report.totals).toEqual({ tool_ms: 30_000, model_ms: 17_200, introspect_ms: 4_800 })
+  })
+
+  test('没有完成轮次时 last_turn 为 null', () => {
+    const state = stateWith(turnRecord({ endTime: null }))
+    const report = buildStatusReport(state)
+    expect(report.last_turn).toBeNull()
+    expect(report.totals).toEqual({ tool_ms: 0, model_ms: 0, introspect_ms: 0 })
+    expect(report.reflection_open).toBe(false)
+  })
+
+  test('没有预估时 overrun 字段为 null', () => {
+    const report = buildStatusReport(stateWith(turnRecord({ estimateMs: null })))
+    expect(report.last_turn?.estimate_ms).toBeNull()
+    expect(report.last_turn?.overrun_ms).toBeNull()
+    expect(report.last_turn?.overrun_ratio).toBeNull()
   })
 })

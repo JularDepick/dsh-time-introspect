@@ -1,4 +1,4 @@
-/* 测试共用的配置与事件构造. */
+/* 测试共用的配置, 状态与事件构造. */
 
 import type { SessionEvent, SessionEventMap, SessionEventType, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { Config } from '../src/config.js'
@@ -9,18 +9,8 @@ export function makeConfig(overrides: Partial<Config> = {}): Config {
     enabled: true,
     minOverrunRatio: 0.2,
     minOverrunMs: 5000,
-    coolRatio: 0.15,
-    coolRatioAfterResume: 0.1,
-    conservativeTurns: 2,
-    coolAfterHighTurns: 2,
-    minImprovementRatio: 0.1,
-    baselineTurns: 3,
-    coolTurns: 3,
-    dormancyAfterCooldowns: 2,
-    topTools: 5,
     maxTurnHistory: 12,
     locale: 'zh-CN',
-    reflectionTools: [],
     ...overrides,
   }
 }
@@ -36,11 +26,12 @@ export function turnRecord(overrides: Partial<TurnRecord> = {}): TurnRecord {
     endTime: 50_000,
     estimateMs: 30_000,
     toolMs: {},
-    toolCalls: 0,
     reflectionMs: 0,
-    injectionTime: null,
-    injectionForm: null,
-    windowOpen: false,
+    reflectionTools: {},
+    reflectionOpen: false,
+    reflectionStarted: false,
+    reflectionStartTime: null,
+    injectionDone: false,
     ...overrides,
   }
 }
@@ -49,15 +40,34 @@ export function stateWith(...turns: TurnRecord[]): IntrospectState {
   return {
     turns,
     openCalls: {},
-    status: 'active',
-    coolingRemaining: 0,
-    cooldownCount: 0,
-    highStreak: 0,
-    conservativeRemaining: 0,
-    noticePending: false,
-    noticeEmitted: false,
-    restartReason: null,
-    restartPrefixPending: false,
-    everInjected: false,
+    state: 'active',
+    wakenPending: false,
+    wakenReason: null,
   }
+}
+
+export function toolCall(turn: number, callId: string, name: string, args: unknown, time: number): SessionEvent {
+  return ev(
+    'tool/call',
+    { turn, step: 1, callId, name, arguments: JSON.stringify(args) } as unknown as SessionEventMap['tool/call'],
+    time,
+  )
+}
+
+export function toolResult(turn: number, callId: string, time: number, isError = false): SessionEvent {
+  return ev(
+    'tool/result',
+    {
+      turn,
+      step: 1,
+      message: {
+        role: 'tool',
+        id: `msg-${callId}`,
+        content: [],
+        source: { kind: 'tool', callId },
+        ...(isError ? { isError: true } : {}),
+      },
+    } as unknown as SessionEventMap['tool/result'],
+    time,
+  )
 }

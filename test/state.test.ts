@@ -1,182 +1,206 @@
-/* 投影折叠的单元测试. */
+/* 投影折叠测试. */
 
 import { describe, expect, test } from 'vitest'
-import { initialIntrospectState, introspectStateSchema, reduceIntrospect } from '../src/state.js'
-import { makeConfig, ev } from './helpers.js'
-import { SOURCE_KIND } from '../src/constants.js'
 import type { SessionEvent, SessionEventMap } from '@deepseek-ai/dsh-session'
+import { SHUT_TOOL, SOURCE_KIND, START_TOOL, STOP_TOOL, WAKEN_TOOL, ESTIMATE_TOOL } from '../src/constants.js'
+import { initialIntrospectState, reduceIntrospect } from '../src/state.js'
 import type { IntrospectState } from '../src/state-types.js'
+import { ev, makeConfig, toolCall, toolResult } from './helpers.js'
 
-const config = makeConfig()
-
-function toolCall(time: number, callId: string, name: string, args = '{}', turn = 1): SessionEvent {
-  const data = { turn, step: 1, callId, name, arguments: args } as unknown as SessionEventMap['tool/call']
-  return ev('tool/call', data, time)
+function injection(time: number): SessionEvent {
+  return ev(
+    'user/message',
+    {
+      role: 'user',
+      id: 'u',
+      content: [],
+      source: { kind: SOURCE_KIND, form: 'snapshot', sections: [] },
+    } as unknown as SessionEventMap['user/message'],
+    time,
+  )
 }
 
-function toolResult(time: number, callId: string, turn = 1): SessionEvent {
-  const data = {
-    turn,
-    step: 1,
-    message: { role: 'tool', id: callId, content: [], source: { kind: 'tool', callId } },
-  } as unknown as SessionEventMap['tool/result']
-  return ev('tool/result', data, time)
+function start(time: number): SessionEvent {
+  return ev('turn/start', { turn: 1 } as unknown as SessionEventMap['turn/start'], time)
 }
 
-function injected(time: number, form: 'snapshot' | 'notice' = 'snapshot'): SessionEvent {
-  const source =
-    form === 'notice'
-      ? { kind: SOURCE_KIND, form: 'notice', summary: 'dormant' }
-      : { kind: SOURCE_KIND, form: 'snapshot', sections: [{ name: SOURCE_KIND, text: 'x' }] }
-  return ev('user/message', { role: 'user', id: 'm', content: [{ type: 'text', text: 'x' }], source } as unknown as SessionEventMap['user/message'], time)
+function end(turn: number, time: number): SessionEvent {
+  return ev('turn/end', { turn } as unknown as SessionEventMap['turn/end'], time)
 }
 
-function run(events: SessionEvent[], initial: IntrospectState = initialIntrospectState()): IntrospectState {
-  return events.reduce((state, event) => reduceIntrospect(state, event, config), initial)
+function apply(events: SessionEvent[], config = makeConfig()): IntrospectState {
+  let state = initialIntrospectState()
+  for (const event of events) state = reduceIntrospect(state, event, config)
+  return state
 }
 
-describe('投影折叠', () => {
-  test('按工具名聚合耗时并配对调用开始时间', () => {
-    const state = run([
-      ev('turn/start', { turn: 1 }, 1_000),
-      toolCall(1_100, 'a', 'bash'),
-      toolResult(2_100, 'a'),
-      toolCall(2_200, 'b', 'bash'),
-      toolResult(2_700, 'b'),
-      toolCall(2_800, 'c', 'read'),
-      toolResult(3_300, 'c'),
+describe('基础折叠', () => {
+  test('登记预估并聚合工具耗时', () => {
+    const state = apply([
+      start(1_000),
+      toolCall(1, 'e', ESTIMATE_TOOL, { estimateMs: 30_000 }, 1_100),
+      toolResult(1, 'e', 1_200),
+      toolCall(1, 'b', 'bash', {}, 1_300),
+      toolResult(1, 'b', 31_300),
+      end(1, 52_000),
     ])
-    const record = state.turns[0]
-    expect(record?.toolMs).toEqual({ bash: 1_500, read: 500 })
-    expect(record?.toolCalls).toBe(3)
+    expect(state.turns[0]?.estimateMs).toBe(30_000)
+    expect(state.turns[0]?.toolMs.bash).toEqual({ ms: 30_000, calls: 1 })
+    expect(state.turns[0]?.endTime).toBe(52_000)
   })
 
-  test('time_introspect_task_estimate 参数被记为该轮预估, 同轮以最后一次为准', () => {
-    const state = run([
-      ev('turn/start', { turn: 1 }, 1_000),
-      toolCall(1_100, 'a', 'time_introspect_task_estimate', '{"estimateMs":30000}'),
-      toolResult(1_200, 'a'),
-      toolCall(1_300, 'b', 'time_introspect_task_estimate', '{"estimateMs":45000}'),
-      toolResult(1_400, 'b'),
+  test('同一轮多次预估以最后一次为准', () => {
+    const state = apply([
+      start(1_000),
+      toolCall(1, 'e1', ESTIMATE_TOOL, { estimateMs: 30_000 }, 1_100),
+      toolResult(1, 'e1', 1_150),
+      toolCall(1, 'e2', ESTIMATE_TOOL, { estimateMs: 20_000 }, 1_200),
+      toolResult(1, 'e2', 1_250),
     ])
-    expect(state.turns[0]?.estimateMs).toBe(45_000)
+    expect(state.turns[0]?.estimateMs).toBe(20_000)
   })
 
-  test('非法预估参数被忽略', () => {
-    const state = run([
-      ev('turn/start', { turn: 1 }, 1_000),
-      toolCall(1_100, 'a', 'time_introspect_task_estimate', '{"estimateMs":0}'),
-      toolResult(1_200, 'a'),
+  test('失败的预估结果不写账', () => {
+    const state = apply([
+      start(1_000),
+      toolCall(1, 'e', ESTIMATE_TOOL, { estimateMs: 30_000 }, 1_100),
+      toolResult(1, 'e', 1_150, true),
     ])
     expect(state.turns[0]?.estimateMs).toBeNull()
   })
+})
 
-  test('反思窗口从注入时刻到 time_introspect_report_reflection_cost 结束', () => {
-    const state = run([
-      ev('turn/start', { turn: 1 }, 1_000),
-      injected(2_000),
-      toolCall(3_000, 'r', 'time_introspect_report_reflection_cost', '{"summary":"ok"}'),
-      toolResult(3_400, 'r'),
-      ev('turn/end', { turn: 1, reason: { kind: 'completed' } } as unknown as SessionEventMap['turn/end'], 5_000),
+describe('反思窗口', () => {
+  test('start 结果到 stop 调用之间计为反思, 窗口内工具进入反思明细', () => {
+    const state = apply([
+      start(0),
+      injection(100),
+      toolCall(1, 's', START_TOOL, {}, 200),
+      toolResult(1, 's', 250),
+      toolCall(1, 'r', 'read', {}, 300),
+      toolResult(1, 'r', 1_300),
+      toolCall(1, 'p', STOP_TOOL, {}, 2_000),
+      toolResult(1, 'p', 2_100),
+      end(1, 5_000),
     ])
     const record = state.turns[0]
-    expect(record?.reflectionMs).toBe(3_400 - 2_000)
-    expect(record?.toolMs).toEqual({})
+    expect(record?.reflectionMs).toBe(1_750)
+    expect(record?.reflectionTools.read).toEqual({ ms: 1_000, calls: 1 })
+    expect(record?.toolMs[START_TOOL]).toEqual({ ms: 50, calls: 1 })
+    expect(record?.toolMs[STOP_TOOL]).toEqual({ ms: 100, calls: 1 })
+    expect(record?.reflectionOpen).toBe(false)
   })
 
-  test('反思后第一个普通工具调用在开始时刻关闭窗口', () => {
-    const state = run([
-      ev('turn/start', { turn: 1 }, 1_000),
-      injected(2_000),
-      toolCall(2_500, 'a', 'bash'),
-      toolResult(3_500, 'a'),
+  test('没有注入时 start 成功也不开窗', () => {
+    const state = apply([
+      start(0),
+      toolCall(1, 's', START_TOOL, {}, 200),
+      toolResult(1, 's', 250),
+    ])
+    expect(state.turns[0]?.reflectionOpen).toBe(false)
+  })
+
+  test('同一轮 stop 后不能再次开始', () => {
+    const state = apply([
+      start(0),
+      injection(100),
+      toolCall(1, 's1', START_TOOL, {}, 200),
+      toolResult(1, 's1', 250),
+      toolCall(1, 'p1', STOP_TOOL, {}, 600),
+      toolResult(1, 'p1', 650),
+      toolCall(1, 's2', START_TOOL, {}, 700),
+      toolResult(1, 's2', 750),
     ])
     const record = state.turns[0]
-    expect(record?.reflectionMs).toBe(500)
-    expect(record?.toolMs).toEqual({ bash: 1_000 })
+    expect(record?.reflectionStarted).toBe(true)
+    expect(record?.reflectionOpen).toBe(false)
+    expect(record?.reflectionMs).toBe(350)
   })
 
-  test('休眠状态下反思工具的耗时进入普通工具分桶', () => {
-    const dormant = { ...initialIntrospectState(), status: 'dormant' as const }
-    const state = run(
-      [
-        ev('turn/start', { turn: 1 }, 1_000),
-        toolCall(1_100, 'r', 'time_introspect_report_reflection_cost'),
-        toolResult(1_600, 'r'),
-      ],
-      dormant,
-    )
+  test('没有开始就 stop 不产生窗口', () => {
+    const state = apply([
+      start(0),
+      injection(100),
+      toolCall(1, 'p', STOP_TOOL, {}, 2_000),
+      toolResult(1, 'p', 2_100),
+    ])
+    expect(state.turns[0]?.reflectionOpen).toBe(false)
     expect(state.turns[0]?.reflectionMs).toBe(0)
-    expect(state.turns[0]?.toolMs).toEqual({ time_introspect_report_reflection_cost: 500 })
   })
 
-  test('轮次结束后按上限裁剪历史', () => {
+  test('轮次结束仍未 stop 的窗口丢弃, 工具回到普通分桶', () => {
+    const state = apply([
+      start(0),
+      injection(100),
+      toolCall(1, 's', START_TOOL, {}, 200),
+      toolResult(1, 's', 250),
+      toolCall(1, 'r', 'read', {}, 300),
+      toolResult(1, 'r', 1_300),
+      end(1, 5_000),
+    ])
+    const record = state.turns[0]
+    expect(record?.reflectionMs).toBe(0)
+    expect(record?.reflectionTools).toEqual({})
+    expect(record?.toolMs.read).toEqual({ ms: 1_000, calls: 1 })
+    expect(record?.reflectionOpen).toBe(false)
+  })
+})
+
+describe('休眠与重启', () => {
+  test('休眠折叠未闭合窗口并清空待展示原因', () => {
+    const state = apply([
+      start(0),
+      injection(100),
+      toolCall(1, 's', START_TOOL, {}, 200),
+      toolResult(1, 's', 250),
+      toolCall(1, 'r', 'read', {}, 300),
+      toolResult(1, 'r', 1_300),
+      toolCall(1, 'h', SHUT_TOOL, { reason: '够了' }, 2_000),
+      toolResult(1, 'h', 2_010),
+    ])
+    const record = state.turns[0]
+    expect(state.state).toBe('dormant')
+    expect(record?.reflectionOpen).toBe(false)
+    expect(record?.reflectionMs).toBe(0)
+    expect(record?.toolMs.read).toEqual({ ms: 1_000, calls: 1 })
+    expect(state.wakenPending).toBe(false)
+  })
+
+  test('重启记录原因, 注入后清空', () => {
+    const state = apply([
+      start(0),
+      toolCall(1, 'h', SHUT_TOOL, { reason: '够了' }, 100),
+      toolResult(1, 'h', 110),
+      toolCall(1, 'w', WAKEN_TOOL, { reason: '继续' }, 200),
+      toolResult(1, 'w', 210),
+    ])
+    expect(state.state).toBe('active')
+    expect(state.wakenPending).toBe(true)
+    expect(state.wakenReason).toBe('继续')
+    const afterInjection = reduceIntrospect(state, injection(300), makeConfig())
+    expect(afterInjection.wakenPending).toBe(false)
+    expect(afterInjection.wakenReason).toBeNull()
+  })
+
+  test('已活动时重启不写待展示原因', () => {
+    const state = apply([
+      start(0),
+      toolCall(1, 'w', WAKEN_TOOL, { reason: '继续' }, 200),
+      toolResult(1, 'w', 210),
+    ])
+    expect(state.state).toBe('active')
+    expect(state.wakenPending).toBe(false)
+  })
+})
+
+describe('历史截断', () => {
+  test('超过 maxTurnHistory 时丢弃最旧轮次', () => {
     const events: SessionEvent[] = []
-    for (let turn = 1; turn <= 5; turn += 1) {
-      events.push(ev('turn/start', { turn }, turn * 1_000))
-      events.push(ev('turn/end', { turn, reason: { kind: 'completed' } } as unknown as SessionEventMap['turn/end'], turn * 1_000 + 500))
+    for (let turn = 1; turn <= 3; turn += 1) {
+      events.push(ev('turn/start', { turn } as unknown as SessionEventMap['turn/start'], turn * 10_000))
+      events.push(end(turn, turn * 10_000 + 5_000))
     }
-    const unlimited = run(events, initialIntrospectState())
-    expect(unlimited.turns).toHaveLength(5)
-    const limited = events.reduce((acc, event) => reduceIntrospect(acc, event, makeConfig({ maxTurnHistory: 4 })), initialIntrospectState())
-    expect(limited.turns).toHaveLength(4)
-    expect(limited.turns.at(-1)?.turn).toBe(5)
-  })
-
-  test('休眠通知被记为已发出', () => {
-    const state = run(
-      [ev('turn/start', { turn: 1 }, 1_000), injected(1_100, 'notice')],
-      { ...initialIntrospectState(), status: 'dormant', noticePending: true },
-    )
-    expect(state.noticePending).toBe(false)
-    expect(state.noticeEmitted).toBe(true)
-    expect(state.turns[0]?.injectionForm).toBe('notice')
-  })
-
-  test('time_introspect_resume_reflection 重置自约束状态并记录原因', () => {
-    const dormant = { ...initialIntrospectState(), status: 'dormant' as const, cooldownCount: 2, noticePending: true }
-    const state = run(
-      [
-        toolCall(1_000, 'resume', 'time_introspect_resume_reflection', '{"reason":"步骤越来越冗杂"}'),
-        toolResult(1_100, 'resume'),
-      ],
-      dormant,
-    )
-    expect(state.status).toBe('active')
-    expect(state.cooldownCount).toBe(0)
-    expect(state.conservativeRemaining).toBe(config.conservativeTurns)
-    expect(state.restartReason).toBe('步骤越来越冗杂')
-    expect(state.restartPrefixPending).toBe(true)
-    expect(state.noticePending).toBe(false)
-  })
-
-  test('投影 schema 接受初始状态并拒绝未知状态', () => {
-    expect(() => introspectStateSchema.parse(initialIntrospectState())).not.toThrow()
-    expect(() => introspectStateSchema.parse({ ...initialIntrospectState(), status: 'paused' })).toThrow()
-  })
-
-  test('同轮重复 turn/start 重置该轮记录而不追加', () => {
-    const state = run([
-      ev('turn/start', { turn: 1 }, 1_000),
-      toolCall(1_100, 'a', 'bash'),
-      ev('turn/start', { turn: 1 }, 2_000),
-    ])
-    expect(state.turns).toHaveLength(1)
-    expect(state.turns[0]?.startTime).toBe(2_000)
-  })
-
-  test('未配对的工具结果被安全忽略', () => {
-    const state = run([ev('turn/start', { turn: 1 }, 1_000), toolResult(2_000, 'missing')])
-    expect(state.turns[0]?.toolMs).toEqual({})
-  })
-
-  test('turn/end 关闭仍然开放的反思窗口且不计入开销', () => {
-    const state = run([
-      ev('turn/start', { turn: 1 }, 1_000),
-      injected(2_000),
-      ev('turn/end', { turn: 1, reason: { kind: 'completed' } } as unknown as SessionEventMap['turn/end'], 9_000),
-    ])
-    expect(state.turns[0]?.windowOpen).toBe(false)
-    expect(state.turns[0]?.reflectionMs).toBe(0)
+    const state = apply(events, makeConfig({ maxTurnHistory: 2 }))
+    expect(state.turns.map((turn) => turn.turn)).toEqual([2, 3])
   })
 })
