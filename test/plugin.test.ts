@@ -7,7 +7,7 @@ import { Config, validateConfig } from '../src/config.js'
 import { ALL_TOOLS, PROJECTION_KEY, SOURCE_KIND } from '../src/constants.js'
 import { initialIntrospectState } from '../src/state.js'
 import type { IntrospectState } from '../src/state-types.js'
-import { ev, makeConfig, stateWith, toolCall, toolResult, turnRecord } from './helpers.js'
+import { ev, makeConfig, ptcSettle, ptcStart, stateWith, toolCall, toolResult, turnRecord } from './helpers.js'
 
 function makeFakeContext() {
   const listeners = new Map<string, Array<(payload: any, next: any) => unknown>>()
@@ -57,6 +57,20 @@ function qualifiedEvents(): SessionEvent[] {
     toolResult(1, 'e', 1_200),
     toolCall(1, 'b', 'bash', {}, 1_300),
     toolResult(1, 'b', 31_300),
+    ev('turn/end', { turn: 1 } as unknown as SessionEventMap['turn/end'], 52_000),
+  ]
+}
+
+/* PTC 模式下真实工具调用走子派发事件, 原生 tool/call 只有外层 run_code. */
+function ptcQualifiedEvents(): SessionEvent[] {
+  return [
+    ev('turn/start', { turn: 1 } as unknown as SessionEventMap['turn/start'], 1_000),
+    toolCall(1, 'rc', 'run_code', {}, 1_050),
+    ptcStart('rc', 'rc:ptc:1', 'time_introspect_estimate', { estimateMs: 30_000 }, 1_100),
+    ptcSettle('rc', 'rc:ptc:1', 'time_introspect_estimate', { estimateMs: 30_000 }, 1_110),
+    ptcStart('rc', 'rc:ptc:2', 'bash', {}, 1_200),
+    ptcSettle('rc', 'rc:ptc:2', 'bash', {}, 30_000),
+    toolResult(1, 'rc', 51_000),
     ev('turn/end', { turn: 1 } as unknown as SessionEventMap['turn/end'], 52_000),
   ]
 }
@@ -155,6 +169,23 @@ describe('注入时机', () => {
     expect(json.estimate_ms).toBe(30_000)
     expect(json.overrun_ms).toBe(21_000)
     expect(json.time_consume_total_ms).toBe(51_000)
+  })
+
+  test('PTC 子调用登记的预估同样触发注入并计入工具明细', async () => {
+    const fake = prepare()
+    let state = fake.definition.init()
+    for (const event of ptcQualifiedEvents()) state = fake.definition.apply(state, event)
+    setState(fake, fake.session, state)
+    const decision: any = await fake.listener(
+      { agent: { session: fake.session }, turn: 2, step: 1, signal: { aborted: false } },
+      enterDecision,
+    )
+    expect(decision.messages).toHaveLength(1)
+    const json = JSON.parse(decision.messages[0].content[0].text)
+    expect(json.estimate_ms).toBe(30_000)
+    expect(json.time_consume_total_ms).toBe(51_000)
+    const names = json.time_consume_details.tool.details.map((item: any) => item.name)
+    expect(names).toContain('bash')
   })
 
   test('非 step 1, 中止或下游拒绝时不注入', async () => {

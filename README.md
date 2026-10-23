@@ -20,6 +20,7 @@
 
 - 超时触发: 仅当上一轮有预估记录, 且实际耗时同时超过比例阈值(`minOverrunRatio`, 默认 20%)与绝对下限(`minOverrunMs`, 默认 5000 毫秒)时, 在下一轮 step 1 注入一次
 - 完整 JSON: 注入内容是结构化 JSON, 包含总账, 工具耗时, 模型自身处理与反思内部明细; 全部工具逐个列出, 不做 top N 合并
+- PTC 兼容: `run_code` 程序内嵌套调用的工具同样被识别, 预估, 反思, 休眠与工具明细都按真实工具名入账
 - 显式反思边界: 模型调用 `time_introspect_start` 开始, `time_introspect_stop` 结束; 插件按两次调用的位置计时, 模型不需要整理或上报任何耗时数据
 - 反思自计费: 反思窗口内的全部耗时计入反思开销, 窗口内的工具单独列在 `introspect` 明细里, 帮助模型判断反思本身是否值得
 - 模型控制休眠: `time_introspect_shut` 让插件休眠, `time_introspect_waken` 恢复; 没有自动冷却与自动休眠
@@ -125,7 +126,8 @@ dsh plugin --profile <name> add dsh-time-introspect
 ## 口径与判定
 
 - 实际耗时: `turn/end` 事件时间减去 `turn/start` 事件时间
-- 工具耗时: 按 `callId` 配对 `tool/call` 与 `tool/result`
+- 工具耗时: 原生调用按 `callId` 配对 `tool/call` 与 `tool/result`; PTC 模式下的子调用按 `subCallId` 配对 `tool/ptc-dispatch-start` 与 `tool/ptc-dispatch`
+- 嵌套调用: PTC 子调用按真实工具名入账, 外层 `run_code` 只记扣除子调用后的净耗时, 总账不重复计数
 - 反思窗口: `time_introspect_start` 的工具结果到 `time_introspect_stop` 的工具调用开始
 - 反思窗口内全部耗时计入反思开销; 窗口内的普通工具与插件工具进入 `introspect.details.tool`, 不再进入顶层 `tool.details`
 - 本插件自身工具与其他工具一样进入 `tool.details`, 不单列插件开销
@@ -188,7 +190,7 @@ npm run build
 npm run pack
 ```
 
-构建产物在 `lib/`, 入口为 `lib/index.js`, 客户端入口为 `lib/client.js`. `npm run build` 同时生成 host 与 client; `npm run build:client` 只重建客户端. `npm run pack` 把 tgz 产物统一放进 `release/`. 机制细节见 [docs/mechanism.md](./docs/mechanism.md).
+构建产物在 `lib/`, 入口为 `lib/index.js`, 客户端入口为 `lib/client.js`. `npm run build` 同时生成 host 与 client; `npm run build:client` 只重建客户端. `npm run pack` 或直接 `npm pack` 的 tgz 产物都会落入 `release/`, 根目录不保留. 机制细节见 [docs/mechanism.md](./docs/mechanism.md).
 
 目录结构:
 

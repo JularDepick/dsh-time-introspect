@@ -52,6 +52,7 @@
     "test:watch": "vitest",
     "pack": "node scripts/pack.mjs",
     "prepack": "npm run build",
+    "postpack": "node scripts/pack-clean.mjs",
     "prepublishOnly": "npm run typecheck && npm run test && npm run build",
     "build:client": "node scripts/build-client.mjs"
   },

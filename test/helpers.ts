@@ -56,6 +56,42 @@ export function toolCall(turn: number, callId: string, name: string, args: unkno
   )
 }
 
+/* 旧版宿主可能没有对应的事件类型, 这里用原始形状构造. */
+export function rawSessionEvent(type: string, data: unknown, time: number): SessionEvent {
+  return { type, data, time, seq: time as unknown as SessionSeq } as unknown as SessionEvent
+}
+
+export function ptcStart(parentCallId: string, subCallId: string, name: string, args: unknown, time: number): SessionEvent {
+  return rawSessionEvent(
+    'tool/ptc-dispatch-start',
+    { rootCallId: parentCallId, parentCallId, subCallId, name, arguments: JSON.stringify(args) },
+    time,
+  )
+}
+
+export function ptcSettle(
+  parentCallId: string,
+  subCallId: string,
+  name: string,
+  args: unknown,
+  time: number,
+  isError = false,
+): SessionEvent {
+  return rawSessionEvent(
+    'tool/ptc-dispatch',
+    {
+      rootCallId: parentCallId,
+      parentCallId,
+      subCallId,
+      name,
+      arguments: JSON.stringify(args),
+      isError,
+      content: [],
+    },
+    time,
+  )
+}
+
 export function toolResult(turn: number, callId: string, time: number, isError = false): SessionEvent {
   return ev(
     'tool/result',

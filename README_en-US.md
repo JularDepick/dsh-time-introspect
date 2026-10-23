@@ -20,6 +20,7 @@ Supports dsh 0.2.0-rc.2, 0.2.1-rc.1 and 0.2.1-rc.2
 
 - Overrun-triggered: injection happens once at step 1 of the next turn only when the previous turn has an estimate and its actual duration exceeds both a ratio (`minOverrunRatio`, default 20%) and an absolute floor (`minOverrunMs`, default 5000 ms)
 - Complete JSON: the injection is structured JSON with totals, per-tool time, model self-processing, and introspection internals; every tool is listed individually, with no top-N folding
+- PTC aware: tools nested inside a `run_code` program are recognized too, so estimates, introspection, sleep, and per-tool details all use the real tool name
 - Explicit introspection boundaries: the model calls `time_introspect_start` and `time_introspect_stop`; the plugin measures between those positions, so the model never compiles or reports timing data
 - Self-billed introspection: all time inside the introspection window counts as introspection cost; tools used inside it are listed under `introspect` so the model can judge whether introspection paid off
 - Model-controlled sleep: `time_introspect_shut` puts the plugin to sleep and `time_introspect_waken` restores it; there is no automatic cooling or dormancy
@@ -125,7 +126,8 @@ The bubble auto-expand duration is fixed at 3 seconds, the history auto-expand w
 ## Measurement
 
 - Actual duration: `turn/end` event time minus `turn/start` event time
-- Tool duration: `tool/call` and `tool/result` paired by `callId`
+- Tool duration: native calls pair `tool/call` with `tool/result` by `callId`; PTC sub-calls pair `tool/ptc-dispatch-start` with `tool/ptc-dispatch` by `subCallId`
+- Nested calls: PTC sub-calls are accounted under their real tool name, and the enclosing `run_code` keeps only the net duration after subtracting them, so totals never double count
 - Introspection window: from the `time_introspect_start` result to the `time_introspect_stop` call
 - All time inside the introspection window counts as introspection cost; ordinary and plugin tools inside it appear under `introspect.details.tool` and not in the top-level `tool.details`
 - This plugin's own tools appear in `tool.details` like any other tool; there is no separate plugin overhead line
@@ -188,7 +190,7 @@ npm run build
 npm run pack
 ```
 
-Build output lives in `lib/`, with `lib/index.js` as the host entry and `lib/client.js` as the browser entry. `npm run build` produces both; `npm run build:client` rebuilds the client only. `npm run pack` writes the tgz artifact into `release/`. Mechanism details live in [docs/mechanism.md](./docs/mechanism.md).
+Build output lives in `lib/`, with `lib/index.js` as the host entry and `lib/client.js` as the browser entry. `npm run build` produces both; `npm run build:client` rebuilds the client only. `npm run pack` and direct `npm pack` both land the tgz artifact in `release/`; the root directory does not keep it. Mechanism details live in [docs/mechanism.md](./docs/mechanism.md).
 
 Directory layout:
 

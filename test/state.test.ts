@@ -3,9 +3,10 @@
 import { describe, expect, test } from 'vitest'
 import type { SessionEvent, SessionEventMap } from '@deepseek-ai/dsh-session'
 import { SHUT_TOOL, SOURCE_KIND, START_TOOL, STOP_TOOL, WAKEN_TOOL, ESTIMATE_TOOL } from '../src/constants.js'
+import { planInjection } from '../src/policy.js'
 import { initialIntrospectState, reduceIntrospect } from '../src/state.js'
 import type { IntrospectState } from '../src/state-types.js'
-import { ev, makeConfig, toolCall, toolResult } from './helpers.js'
+import { ev, makeConfig, ptcSettle, ptcStart, rawSessionEvent, toolCall, toolResult } from './helpers.js'
 
 function injection(time: number): SessionEvent {
   return ev(
@@ -275,6 +276,138 @@ describe('归档与注入记录', () => {
       toolResult(2, 'h', 54_010),
     ])
     expect(aborted.injections[0]?.outcome).toBe('aborted')
+  })
+})
+
+
+describe('PTC 子调用', () => {
+  test('子调用预估写入当前轮并参与下一轮注入判定', () => {
+    const config = makeConfig()
+    const state = apply([
+      start(1_000),
+      toolCall(1, 'rc', 'run_code', {}, 1_100),
+      ptcStart('rc', 'rc:ptc:1', ESTIMATE_TOOL, { estimateMs: 30_000 }, 1_200),
+      ptcSettle('rc', 'rc:ptc:1', ESTIMATE_TOOL, { estimateMs: 30_000 }, 1_210),
+      toolResult(1, 'rc', 40_000),
+      end(1, 51_500),
+    ])
+    expect(state.turns[0]?.estimateMs).toBe(30_000)
+    const plan = planInjection(state, 2, config)
+    expect(plan?.estimateMs).toBe(30_000)
+    expect(plan?.actualMs).toBe(50_500)
+  })
+
+  test('父调用扣除子调用耗时, 总账不重复计数', () => {
+    const state = apply([
+      start(0),
+      toolCall(1, 'rc', 'run_code', {}, 100),
+      ptcStart('rc', 'rc:ptc:1', 'bash', {}, 200),
+      ptcSettle('rc', 'rc:ptc:1', 'bash', {}, 900),
+      ptcStart('rc', 'rc:ptc:2', 'read', {}, 1_000),
+      ptcSettle('rc', 'rc:ptc:2', 'read', {}, 1_200),
+      toolResult(1, 'rc', 1_500),
+    ])
+    const record = state.turns[0]
+    expect(record?.toolMs.bash).toEqual({ ms: 700, calls: 1 })
+    expect(record?.toolMs.read).toEqual({ ms: 200, calls: 1 })
+    expect(record?.toolMs.run_code).toEqual({ ms: 500, calls: 1 })
+  })
+
+  test('子调用休眠与重启迁移状态', () => {
+    const sleeping = apply([
+      start(0),
+      toolCall(1, 'rc', 'run_code', {}, 100),
+      ptcStart('rc', 'rc:ptc:1', SHUT_TOOL, { reason: '够了' }, 200),
+      ptcSettle('rc', 'rc:ptc:1', SHUT_TOOL, { reason: '够了' }, 210),
+      toolResult(1, 'rc', 300),
+    ])
+    expect(sleeping.state).toBe('dormant')
+    expect(sleeping.wakenPending).toBe(false)
+
+    const wakened = apply([
+      start(0),
+      toolCall(1, 'rc', 'run_code', {}, 100),
+      ptcStart('rc', 'rc:ptc:1', SHUT_TOOL, { reason: '够了' }, 200),
+      ptcSettle('rc', 'rc:ptc:1', SHUT_TOOL, { reason: '够了' }, 210),
+      ptcStart('rc', 'rc:ptc:2', WAKEN_TOOL, { reason: '继续' }, 260),
+      ptcSettle('rc', 'rc:ptc:2', WAKEN_TOOL, { reason: '继续' }, 270),
+      toolResult(1, 'rc', 300),
+    ])
+    expect(wakened.state).toBe('active')
+    expect(wakened.wakenPending).toBe(true)
+    expect(wakened.wakenReason).toBe('继续')
+  })
+
+  test('失败的子调用不写账', () => {
+    const state = apply([
+      start(0),
+      toolCall(1, 'rc', 'run_code', {}, 100),
+      ptcStart('rc', 'rc:ptc:1', ESTIMATE_TOOL, { estimateMs: 30_000 }, 200),
+      ptcSettle('rc', 'rc:ptc:1', ESTIMATE_TOOL, { estimateMs: 30_000 }, 210, true),
+      toolResult(1, 'rc', 300),
+    ])
+    expect(state.turns[0]?.estimateMs).toBeNull()
+  })
+
+  test('反思窗口内的子调用进入反思明细', () => {
+    const state = apply([
+      start(0),
+      injection(100),
+      toolCall(1, 'rc1', 'run_code', {}, 150),
+      ptcStart('rc1', 'rc1:ptc:1', START_TOOL, {}, 200),
+      ptcSettle('rc1', 'rc1:ptc:1', START_TOOL, {}, 210),
+      toolResult(1, 'rc1', 300),
+      toolCall(1, 'rc2', 'run_code', {}, 400),
+      ptcStart('rc2', 'rc2:ptc:1', 'read', {}, 500),
+      ptcSettle('rc2', 'rc2:ptc:1', 'read', {}, 1_500),
+      ptcStart('rc2', 'rc2:ptc:2', STOP_TOOL, {}, 2_000),
+      ptcSettle('rc2', 'rc2:ptc:2', STOP_TOOL, {}, 2_010),
+      toolResult(1, 'rc2', 2_100),
+    ])
+    const record = state.turns[0]
+    expect(record?.introspectionOpen).toBe(false)
+    expect(record?.introspectionMs).toBe(1_790)
+    expect(record?.introspectionTools.read).toEqual({ ms: 1_000, calls: 1 })
+    expect(record?.toolMs[START_TOOL]).toEqual({ ms: 10, calls: 1 })
+    expect(record?.toolMs[STOP_TOOL]).toEqual({ ms: 10, calls: 1 })
+  })
+
+  test('轮次闭合后到达的子调用被丢弃', () => {
+    const state = apply([
+      start(1_000),
+      end(1, 2_000),
+      ptcStart('rc', 'rc:ptc:1', ESTIMATE_TOOL, { estimateMs: 30_000 }, 2_100),
+      ptcSettle('rc', 'rc:ptc:1', ESTIMATE_TOOL, { estimateMs: 30_000 }, 2_110),
+    ])
+    expect(state.turns[0]?.estimateMs).toBeNull()
+    expect(state.openCalls).toEqual({})
+  })
+
+  test('子调用参数为对象时同样解析', () => {
+    const state = apply([
+      start(0),
+      toolCall(1, 'rc', 'run_code', {}, 100),
+      rawSessionEvent(
+        'tool/ptc-dispatch-start',
+        { rootCallId: 'rc', parentCallId: 'rc', subCallId: 'rc:ptc:1', name: ESTIMATE_TOOL, arguments: { estimateMs: 12_000 } },
+        200,
+      ),
+      rawSessionEvent(
+        'tool/ptc-dispatch',
+        {
+          rootCallId: 'rc',
+          parentCallId: 'rc',
+          subCallId: 'rc:ptc:1',
+          name: ESTIMATE_TOOL,
+          arguments: { estimateMs: 12_000 },
+          isError: false,
+          content: [],
+        },
+        210,
+      ),
+      toolResult(1, 'rc', 300),
+    ])
+    expect(state.turns[0]?.estimateMs).toBe(12_000)
   })
 })
 

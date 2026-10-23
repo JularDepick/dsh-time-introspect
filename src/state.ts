@@ -61,6 +61,8 @@ const openCallSchema = z.object({
   time: z.number(),
   arguments: z.string(),
   inIntrospection: z.boolean(),
+  parentCallId: z.string().nullable(),
+  nestedMs: z.number(),
 })
 
 /** 投影状态的持久化 schema. */
@@ -98,6 +100,23 @@ export function createIntrospectProjection(config: Config): ProjectionDefinition
   }
 }
 
+/**
+ * PTC 子调用事件的数据形状; 与 dsh-tools 的事件声明一致, 这里单独声明是因为
+ * 旧版 dsh 可能没有这两个事件类型, 而插件要按事件名兼容处理.
+ */
+interface PtcDispatchData {
+  rootCallId: string
+  parentCallId: string
+  subCallId: string
+  name: string
+  arguments: unknown
+}
+
+interface PtcSettleData extends PtcDispatchData {
+  isError?: boolean
+  error?: { name: string; code: string }
+}
+
 /** 纯折叠函数: 前序状态 + 一个已提交事件 -> 后继状态. */
 export function reduceIntrospect(state: IntrospectState, event: SessionEvent, config: Config): IntrospectState {
   switch (event.type) {
@@ -112,8 +131,59 @@ export function reduceIntrospect(state: IntrospectState, event: SessionEvent, co
     case 'tool/result':
       return onToolResult(state, event.data, event.time)
     default:
-      return state
+      return onPtcEvent(state, event)
   }
+}
+
+/** PTC 模式把所有真实工具调用写成子派发事件, 原生 tool/call 只记录外层 run_code. */
+function onPtcEvent(state: IntrospectState, event: SessionEvent): IntrospectState {
+  const type = event.type as string
+  if (type === 'tool/ptc-dispatch-start') {
+    return onPtcDispatchStart(state, event.data as unknown as PtcDispatchData, event.time)
+  }
+  if (type === 'tool/ptc-dispatch') {
+    return onPtcDispatchSettle(state, event.data as unknown as PtcSettleData, event.time)
+  }
+  return state
+}
+
+/** 子派发开始: 记下调用起点, 结算时按 subCallId 配对. */
+function onPtcDispatchStart(state: IntrospectState, data: PtcDispatchData, time: number): IntrospectState {
+  const index = findOpenTurnIndex(state.turns)
+  const record = state.turns[index]
+  if (index < 0 || record === undefined) return state
+  const call: OpenCall = {
+    name: data.name,
+    time,
+    arguments: normalizeArguments(data.arguments),
+    inIntrospection: record.introspectionOpen,
+    parentCallId: String(data.parentCallId),
+    nestedMs: 0,
+  }
+  return { ...state, openCalls: { ...state.openCalls, [String(data.subCallId)]: call } }
+}
+
+/** 子派发结算: 记账, 状态迁移与原生调用共用同一条成功路径. */
+function onPtcDispatchSettle(state: IntrospectState, data: PtcSettleData, time: number): IntrospectState {
+  const subCallId = String(data.subCallId)
+  const call = state.openCalls[subCallId]
+  if (call === undefined) return state
+  const openCalls = { ...state.openCalls }
+  delete openCalls[subCallId]
+  const index = findOpenTurnIndex(state.turns)
+  const previous = state.turns[index]
+  if (index < 0 || previous === undefined) return { ...state, openCalls }
+  const duration = Math.max(0, time - call.time)
+  if (call.parentCallId !== null) {
+    const parent = openCalls[call.parentCallId]
+    if (parent !== undefined) {
+      openCalls[call.parentCallId] = { ...parent, nestedMs: parent.nestedMs + duration }
+    }
+  }
+  const record = addToolUse(previous, call, duration)
+  const success = data.isError !== true && data.error === undefined
+  if (!success) return { ...state, openCalls, turns: replaceAt(state.turns, index, record) }
+  return applyToolSuccess({ ...state, openCalls }, record, index, call, time)
 }
 
 function onTurnStart(state: IntrospectState, turn: number, time: number): IntrospectState {
@@ -193,6 +263,8 @@ function onToolCall(
     time,
     arguments: data.arguments,
     inIntrospection,
+    parentCallId: null,
+    nestedMs: 0,
   }
   return { ...state, openCalls: { ...state.openCalls, [data.callId]: call } }
 }
@@ -221,13 +293,17 @@ function onToolResult(
   return { ...next, openCalls }
 }
 
-/** 把一次工具调用的耗时放入对应分桶. start/stop 永远属于普通工具. */
+/**
+ * 把一次工具调用的耗时放入对应分桶. start/stop 永远属于普通工具.
+ * 父调用扣除已结算子调用的耗时, 子调用按自己的名字入桶, 总账不重复计数.
+ */
 function addToolUse(record: TurnRecord, call: OpenCall, duration: number): TurnRecord {
   const introspection = call.inIntrospection && call.name !== START_TOOL && call.name !== STOP_TOOL
+  const net = Math.max(0, duration - call.nestedMs)
   if (introspection) {
-    return { ...record, introspectionTools: addAggregate(record.introspectionTools, call.name, duration) }
+    return { ...record, introspectionTools: addAggregate(record.introspectionTools, call.name, net) }
   }
-  return { ...record, toolMs: addAggregate(record.toolMs, call.name, duration) }
+  return { ...record, toolMs: addAggregate(record.toolMs, call.name, net) }
 }
 
 function applyToolSuccess(
@@ -372,6 +448,14 @@ function findTurnIndex(turns: readonly TurnRecord[], turn: number): number {
   return -1
 }
 
+/** 找到当前未闭合的轮次; PTC 事件不带轮次, 只能挂到打开中的轮次, 闭合后丢弃. */
+function findOpenTurnIndex(turns: readonly TurnRecord[]): number {
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    if (turns[index]?.endTime === null) return index
+  }
+  return -1
+}
+
 function findCurrentTurnIndex(turns: readonly TurnRecord[]): number {
   for (let index = turns.length - 1; index >= 0; index -= 1) {
     if (turns[index]?.endTime === null) return index
@@ -392,6 +476,16 @@ function newTurnRecord(turn: number, time: number): TurnRecord {
     introspectionStarted: false,
     introspectionStartTime: null,
     injectionDone: false,
+  }
+}
+
+/** 子派发事件的 arguments 在契约上是值, 运行时与原生事件一样是 JSON 字符串. */
+function normalizeArguments(value: unknown): string {
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value) ?? ''
+  } catch {
+    return ''
   }
 }
 

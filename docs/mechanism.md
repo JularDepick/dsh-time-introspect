@@ -15,9 +15,10 @@
 | 事件 | 用途 |
 |:---:|:---|
 | `turn/start`, `turn/end` | 轮次边界与实际耗时 |
-| `tool/call`, `tool/result` | 按 `callId` 配对得到单次工具耗时 |
+| `tool/call`, `tool/result` | 按 `callId` 配对得到单次原生工具耗时 |
+| `tool/ptc-dispatch-start`, `tool/ptc-dispatch` | PTC 模式下按 `subCallId` 配对得到嵌套工具耗时 |
 | `user/message` | 识别本插件注入的 JSON |
-| `tool/call` 的 `arguments` | 读取预估, 休眠与重启的原因 |
+| 工具事件的 `arguments` | 读取预估, 休眠与重启的原因 |
 
 事件信封上的 `time` 是唯一时间戳来源.
 
@@ -36,7 +37,9 @@
 ## 时间口径
 
 - 实际耗时 = `turn/end.time - turn/start.time`
-- 工具耗时 = `tool/result.time - tool/call.time`
+- 工具耗时 = `tool/result.time - tool/call.time`; PTC 子调用 = `tool/ptc-dispatch.time - tool/ptc-dispatch-start.time`
+- 子调用按真实工具名入桶, 外层 `run_code` 只记扣除子调用后的净耗时, 总账不重复计数
+- PTC 事件不带轮次, 只能挂到当前未闭合的轮次; 轮次闭合后到达的子调用直接丢弃
 - 反思窗口 = `time_introspect_start` 的工具结果到 `time_introspect_stop` 的工具调用开始
 - 反思窗口内的全部耗时计入反思, 包括窗口内的普通工具与插件工具
 - 反思窗口内的工具进入 `introspect.details.tool`, 不再进入顶层 `tool.details`
@@ -120,6 +123,8 @@
 - 没有自动冷却或自动休眠; 是否安静完全取决于模型是否调用 `time_introspect_shut`
 - 反思窗口开启后轮次结束仍未 stop 的, 不记账, 注入记录标记为 `incomplete`
 - profile 目录无法解析时只跳过写盘, 归档仍保留在会话投影中
+- PTC 子调用的起止取两个派发事件的时间, 与被调用工具的真实执行边界相差数毫秒
+- 旧版 dsh 若不写派发事件, PTC 嵌套调用按原生行为处理, 只记录外层 `run_code`
 
 ## 自省 Tab
 

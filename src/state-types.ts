@@ -38,6 +38,10 @@ export interface OpenCall {
   arguments: string
   /** 调用开始时是否处于反思窗口内. */
   inIntrospection: boolean
+  /** PTC 子调用的父调用 id; 原生调用为 null. */
+  parentCallId: string | null
+  /** 已结算子调用的累计耗时, 结算时从自身耗时中扣除. */
+  nestedMs: number
 }
 
 /** 逐会话折叠状态. */
